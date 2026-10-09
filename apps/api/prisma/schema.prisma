@@ -1,0 +1,380 @@
+// Business OS data model. One organisation per deployment; every table is scoped to it.
+
+generator client {
+  provider = "prisma-client-js"
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x", "debian-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Organization {
+  id        String   @id @default("org")
+  slug      String   @unique
+  name      String
+  currency  String   @default("INR")
+  tz        String   @default("Asia/Kolkata")
+  country   String   @default("IN")
+  fyStart   String   @default("April")
+  dateFmt   String   @default("8 Oct 2026")
+  modules   Json     // { crm: true, ... }
+  security  Json
+  policy    Json
+  taxOpts   Json
+  reminders Json
+  templates Json
+  createdAt DateTime @default(now())
+}
+
+model LegalEntity {
+  id        String         @id @default(cuid())
+  name      String
+  gstin     String
+  pan       String
+  cin       String
+  address   String
+  bank      String
+  upi       String
+  isDefault Boolean        @default(false)
+  units     BusinessUnit[]
+}
+
+model BusinessUnit {
+  id       String      @id @default(cuid())
+  name     String      @unique
+  code     String
+  entityId String
+  entity   LegalEntity @relation(fields: [entityId], references: [id])
+  headId   String?
+  head     User?       @relation("UnitHead", fields: [headId], references: [id])
+}
+
+model Role {
+  id      String   @id @default(cuid())
+  name    String   @unique
+  desc    String
+  builtIn Boolean  @default(false)
+  perms   String[]
+  sort    Int      @default(100)
+  users   User[]
+}
+
+model User {
+  id           String    @id @default(cuid())
+  email        String    @unique
+  name         String
+  title        String    @default("")
+  roleId       String
+  role         Role      @relation(fields: [roleId], references: [id])
+  status       String    @default("Active") // Active | Invited | Deactivated
+  passwordHash String?
+  lastActiveAt DateTime?
+  createdAt    DateTime  @default(now())
+
+  unitsHeaded     BusinessUnit[] @relation("UnitHead")
+  customersOwned  Customer[]
+  projectsOwned   Project[]
+  tasksAssigned   Task[]         @relation("TaskAssignee")
+  tasksReported   Task[]         @relation("TaskReporter")
+  taskEvents      TaskEvent[]
+  meetings        MeetingAttendee[]
+  notifications   Notification[]
+}
+
+model Customer {
+  id       String    @id @default(cuid())
+  name     String
+  gstin    String    @unique
+  city     String
+  contact  String
+  email    String
+  phone    String
+  terms    Int       @default(30)
+  ownerId  String
+  owner    User      @relation(fields: [ownerId], references: [id])
+  since    DateTime  @db.Date
+  archived Boolean   @default(false)
+  projects Project[]
+  quotes   Quote[]
+  invoices Invoice[]
+  payments Payment[]
+  opps     Opportunity[]
+}
+
+model Sac {
+  code String @id
+  desc String
+  rate Int
+}
+
+model CatalogItem {
+  id   String @id @default(cuid())
+  d    String
+  sac  String
+  unit String
+  rate Int
+  sort Int    @default(0)
+}
+
+model Series {
+  type    String @id // INVOICE | QUOTATION | CREDIT_NOTE | RECEIPT | PROJECT
+  label   String
+  prefix  String
+  pattern String
+  padding Int
+  next    Int
+  reset   String
+}
+
+model Project {
+  id         String      @id @default(cuid())
+  name       String
+  code       String      @unique
+  customerId String
+  customer   Customer    @relation(fields: [customerId], references: [id])
+  bu         String
+  contract   Int
+  endDate    DateTime    @db.Date
+  health     String      @default("On track")
+  status     String      @default("ACTIVE")
+  ownerId    String
+  owner      User        @relation(fields: [ownerId], references: [id])
+  quoteId    String?
+  createdAt  DateTime    @default(now())
+  milestones Milestone[]
+  tasks      Task[]
+  meetings   Meeting[]
+  invoices   Invoice[]
+  assets     Asset[]
+}
+
+model Milestone {
+  id        String    @id @default(cuid())
+  projectId String
+  project   Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  seq       Int
+  name      String
+  pct       Float
+  value     Int
+  status    String    @default("PENDING")
+  due       DateTime  @db.Date
+  changedAt DateTime?
+}
+
+model Task {
+  id          String      @id @default(cuid())
+  key         Int         @unique
+  title       String
+  desc        String      @default("")
+  projectId   String
+  project     Project     @relation(fields: [projectId], references: [id])
+  assigneeId  String
+  assignee    User        @relation("TaskAssignee", fields: [assigneeId], references: [id])
+  reporterId  String
+  reporter    User        @relation("TaskReporter", fields: [reporterId], references: [id])
+  due         DateTime    @db.Date
+  status      String      @default("todo")
+  priority    String      @default("Medium")
+  createdAt   DateTime    @default(now())
+  events      TaskEvent[]
+  blocks      TimeBlock[]
+}
+
+model TaskEvent {
+  id        String   @id @default(cuid())
+  taskId    String
+  task      Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  kind      String   // comment | sys
+  text      String
+  createdAt DateTime @default(now())
+}
+
+model TimeBlock {
+  id     String   @id @default(cuid())
+  taskId String
+  task   Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  userId String
+  date   DateTime @db.Date
+  start  Float
+  dur    Float
+}
+
+model Meeting {
+  id          String            @id @default(cuid())
+  title       String
+  date        DateTime          @db.Date
+  start       Float
+  dur         Float
+  projectId   String?
+  project     Project?          @relation(fields: [projectId], references: [id])
+  loc         String
+  link        String            @default("")
+  ext         String            @default("")
+  agenda      String            @default("")
+  notes       String            @default("")
+  organizerId String
+  attendees   MeetingAttendee[]
+  actions     ActionItem[]
+}
+
+model MeetingAttendee {
+  meetingId String
+  meeting   Meeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User    @relation(fields: [userId], references: [id])
+  @@id([meetingId, userId])
+}
+
+model ActionItem {
+  id         String  @id @default(cuid())
+  meetingId  String
+  meeting    Meeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  text       String
+  assigneeId String
+  taskId     String?
+  sort       Int     @default(0)
+}
+
+model Quote {
+  id         String   @id @default(cuid())
+  no         String   @unique
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id])
+  title      String
+  date       DateTime @db.Date
+  validUntil DateTime @db.Date
+  status     String   @default("DRAFT")
+  byId       String
+  ver        Int      @default(1)
+  lines      Json
+  notes      String   @default("")
+  rejected   String?
+  projectId  String?
+  invoiceId  String?
+  createdAt  DateTime @default(now())
+}
+
+model Invoice {
+  id          String              @id @default(cuid())
+  no          String              @unique
+  customerId  String
+  customer    Customer            @relation(fields: [customerId], references: [id])
+  title       String
+  projectId   String?
+  project     Project?            @relation(fields: [projectId], references: [id])
+  milestoneId String?
+  date        DateTime            @db.Date
+  due         DateTime            @db.Date
+  status      String              @default("DRAFT")
+  byId        String
+  lines       Json
+  notes       String              @default("")
+  rejected    String?
+  createdAt   DateTime            @default(now())
+  allocations PaymentAllocation[]
+  credits     CreditNote[]
+}
+
+model Payment {
+  id          String              @id @default(cuid())
+  no          String              @unique
+  customerId  String
+  customer    Customer            @relation(fields: [customerId], references: [id])
+  date        DateTime            @db.Date
+  method      String
+  ref         String
+  createdById String
+  allocations PaymentAllocation[]
+}
+
+model PaymentAllocation {
+  id        String  @id @default(cuid())
+  paymentId String
+  payment   Payment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  invoiceId String
+  invoice   Invoice @relation(fields: [invoiceId], references: [id])
+  amount    Int
+}
+
+model CreditNote {
+  id        String   @id @default(cuid())
+  no        String   @unique
+  invoiceId String
+  invoice   Invoice  @relation(fields: [invoiceId], references: [id])
+  date      DateTime @db.Date
+  taxable   Int
+  total     Int
+  reason    String
+}
+
+model Asset {
+  id        String   @id @default(cuid())
+  code      String   @unique
+  name      String
+  cat       String
+  holderId  String?
+  projectId String?
+  project   Project? @relation(fields: [projectId], references: [id])
+  status    String   @default("AVAILABLE")
+  value     Int
+}
+
+model Approval {
+  id            String    @id @default(cuid())
+  kind          String    // Invoice | Quotation | Milestone date | Asset request
+  docType       String?   // invoice | quote
+  docId         String?
+  ref           String
+  title         String
+  detail        String
+  amount        Int?
+  payload       Json?
+  requestedById String
+  approverId    String
+  status        String    @default("PENDING") // PENDING | APPROVED | REJECTED
+  createdAt     DateTime  @default(now())
+  decidedAt     DateTime?
+}
+
+model Opportunity {
+  id         String   @id @default(cuid())
+  name       String
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id])
+  value      Int
+  ownerId    String
+  stage      Int
+  next       String
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  icon      String
+  text      String
+  area      String   // invoice | quote | payment | access | settings
+  userId    String?
+  who       String
+  createdAt DateTime @default(now())
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  icon      String
+  text      String
+  link      String?
+  read      Boolean  @default(false)
+  createdAt DateTime @default(now())
+}
+
+/// Monthly totals imported from the previous system, so reports cover the months before go-live.
+model LegacyMonth {
+  month     String @id // YYYY-MM
+  invoiced  Int
+  collected Int
+}

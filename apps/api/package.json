@@ -1,0 +1,54 @@
+{
+  "name": "@bos/api",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "build": "nest build",
+    "dev": "nest start --watch",
+    "start": "node dist/main.js",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate deploy",
+    "prisma:dev": "prisma migrate dev",
+    "seed": "ts-node --transpile-only prisma/seed.ts",
+    "test": "jest --runInBand"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "0.133.0",
+    "@bos/shared": "workspace:*",
+    "@nestjs/common": "11.1.6",
+    "@nestjs/core": "11.1.6",
+    "@nestjs/jwt": "11.0.0",
+    "@nestjs/platform-express": "11.1.6",
+    "@prisma/client": "6.16.2",
+    "bcryptjs": "3.0.2",
+    "class-transformer": "0.5.1",
+    "class-validator": "0.14.2",
+    "cookie-parser": "1.4.7",
+    "ioredis": "5.7.0",
+    "reflect-metadata": "0.2.2",
+    "rxjs": "7.8.2"
+  },
+  "devDependencies": {
+    "@nestjs/cli": "11.0.10",
+    "@nestjs/testing": "11.1.6",
+    "@types/cookie-parser": "1.4.9",
+    "@types/express": "5.0.3",
+    "@types/jest": "30.0.0",
+    "@types/node": "22.18.0",
+    "@types/supertest": "6.0.3",
+    "jest": "30.1.3",
+    "prisma": "6.16.2",
+    "supertest": "7.1.4",
+    "ts-jest": "29.4.4",
+    "ts-node": "10.9.2",
+    "typescript": "5.9.3"
+  },
+  "jest": {
+    "moduleFileExtensions": ["js", "json", "ts"],
+    "rootDir": ".",
+    "testRegex": "test/.*\\.spec\\.ts$",
+    "transform": { "^.+\\.ts$": ["ts-jest", { "isolatedModules": true }] },
+    "testEnvironment": "node"
+  }
+}
