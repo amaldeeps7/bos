@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpCode, HttpException, HttpStatus, Post, Res, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, HttpCode, HttpException, HttpStatus, Param, Post, Res, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import type { Response } from 'express';
 import * as bcrypt from 'bcryptjs';
@@ -42,6 +42,27 @@ export class AuthController {
     if (process.env.DEMO_MODE !== 'true') return [];
     const users = await this.prisma.user.findMany({ where: { status: 'Active' }, include: { role: true }, orderBy: { role: { sort: 'asc' } } });
     return users.map(u => ({ email: u.email, name: u.name, role: u.role.name }));
+  }
+
+  /** Who an invitation is for, so the accept page can greet them. */
+  @Public() @Get('invite/:token')
+  async inviteInfo(@Param('token') token: string) {
+    const u = await this.prisma.user.findUnique({ where: { inviteToken: String(token) }, include: { role: true } });
+    if (!u || u.status !== 'Invited' || !u.inviteExpiry || u.inviteExpiry < new Date()) throw new BadRequestException('This invitation has expired or was already used. Ask for a new one.');
+    const org = await this.prisma.organization.findUniqueOrThrow({ where: { id: 'org' } });
+    return { email: u.email, name: u.name, role: u.role.name, org: org.name, minPassword: Number((org.security as any).pwd) || 12 };
+  }
+
+  @Public() @Post('accept-invite') @HttpCode(200)
+  async accept(@Body() b: any, @Res({ passthrough: true }) res: Response) {
+    const info = await this.inviteInfo(str(b.token, 'Invitation', { required: true }));
+    const name = str(b.name, 'Name', { max: 120 }).trim(); if (!name) throw new BadRequestException('Enter your name.');
+    const password = String(b.password || ''); if (password.length < info.minPassword) throw new BadRequestException(`Use at least ${info.minPassword} characters.`);
+    const u = await this.prisma.user.update({ where: { email: info.email }, data: { name, title: str(b.title, 'Job title', { max: 120 }).trim(), passwordHash: await bcrypt.hash(password, 10), status: 'Active', inviteToken: null, inviteExpiry: null, lastActiveAt: new Date() } });
+    await this.prisma.auditLog.create({ data: { userId: u.id, who: u.name, text: `${u.name} accepted the invitation and joined`, icon: 'icon-user-plus', area: 'access' } });
+    const token = await this.jwt.signAsync({ sub: u.id });
+    res.cookie(COOKIE, token, { httpOnly: true, sameSite: 'lax', secure: process.env.COOKIE_SECURE === 'true', maxAge: 8 * 3600_000, path: '/' });
+    return { ok: true };
   }
 
   @Get('me')

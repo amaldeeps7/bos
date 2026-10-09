@@ -4,14 +4,15 @@ import { useRouter } from 'next/navigation';
 import { diffDays, fmtD, inr } from '@bos/shared';
 import { useAct, useApp, useQ } from '@/lib/app';
 import type { Customer, Invoice, Payment } from '@/lib/types';
-import { Btn, Card, PageHead, Tabs } from '@/components/ui';
+import { Btn, Card, Icon, PageHead, Tabs } from '@/components/ui';
+import { PaymentDialogEdit } from '@/components/forms';
 
-const RC = '150px minmax(160px,1.2fr) 90px minmax(180px,1.4fr) 150px 130px';
+const RC = '150px minmax(160px,1.2fr) 90px minmax(180px,1.4fr) 150px 130px 32px';
 const AC = 'minmax(180px,1.6fr) repeat(5,minmax(100px,1fr))';
 const AGE = ['Not yet due', '1–30 days overdue', '31–60 days overdue', 'Over 60 days'];
 
 export default function Payments() {
-  const router = useRouter(); const act = useAct(); const { today, can } = useApp();
+  const router = useRouter(); const act = useAct(); const { today, can, has } = useApp(); const [edit, setEdit] = useState<Payment | null>(null);
   const payments = useQ<Payment[]>('payments').data || [];
   const invoices = useQ<Invoice[]>(can('billing') ? 'invoices' : null).data || [];
   const customers = useQ<Customer[]>('customers').data || [];
@@ -24,10 +25,11 @@ export default function Payments() {
   return <>
     <PageHead title="Payments" sub="Money received, and what customers still owe." right={tab === 'receivables' && <Btn icon="bell-ring" onClick={() => act('payments/remind-overdue')}>Remind overdue customers</Btn>} />
     <Tabs tabs={[{ id: 'receipts', label: 'Receipts', count: payments.length }, { id: 'receivables', label: 'Receivables', count: open.length }]} value={tab} onChange={setTab} />
+    {edit && <PaymentDialogEdit payment={edit} onClose={() => setEdit(null)} />}
     {tab === 'receipts' ? (
       <Card style={{ overflowX: 'auto' }}>
-        <div style={{ minWidth: 860 }}>
-          <div className="grid-head" style={{ display: 'grid', gridTemplateColumns: RC }}><span>Receipt</span><span>Customer</span><span>Received</span><span>Method &amp; reference</span><span>Applied to</span><span style={{ textAlign: 'right' }}>Amount</span></div>
+        <div style={{ minWidth: 900 }}>
+          <div className="grid-head" style={{ display: 'grid', gridTemplateColumns: RC }}><span>Receipt</span><span>Customer</span><span>Received</span><span>Method &amp; reference</span><span>Applied to</span><span style={{ textAlign: 'right' }}>Amount</span><span /></div>
           {payments.map(r => (
             <div key={r.id} style={{ display: 'grid', gridTemplateColumns: RC, gap: 16, alignItems: 'center', padding: '12px 20px', borderBottom: '1px solid #f1f5f9', fontSize: 14 }}>
               <span className="mono" style={{ fontSize: 13 }}>{r.no}</span>
@@ -36,6 +38,7 @@ export default function Payments() {
               <span style={{ color: '#64748b' }}>{r.method} · <span className="mono" style={{ fontSize: 12.5 }}>{r.ref}</span></span>
               <button onClick={() => r.allocations[0] && router.push(`/invoices/${r.allocations[0].invoiceId}`)} className="mono" style={{ justifySelf: 'start', border: 0, background: 'none', padding: 0, color: '#0052ff', fontSize: 13, cursor: 'pointer' }}>{r.allocations[0]?.invoiceNo || '—'}</button>
               <span className="num" style={{ textAlign: 'right', fontWeight: 600 }}>{inr(r.amount)}</span>
+              {has('payment.update') ? <button onClick={() => setEdit(r)} title="Edit receipt" aria-label={`Edit ${r.no}`} className="ghost-icon" style={{ width: 32, height: 32 }}><Icon name="pencil" size={14} /></button> : <span />}
             </div>
           ))}
         </div>

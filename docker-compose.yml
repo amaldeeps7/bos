@@ -1,7 +1,8 @@
-# Business OS: Postgres + Redis + API + web.
-#   cp .env.example .env   (optional: add ANTHROPIC_API_KEY)
+# Business OS: Postgres + Redis + API + web, plus Mailpit to catch outgoing email.
+#   cp .env.example .env   (optional: add ANTHROPIC_API_KEY, or a real SMTP_URL)
 #   docker compose up --build
-# Then open http://localhost:3000 and sign in as priya@democonsulting.in / demo1234.
+# Open http://localhost:3000 and sign in as priya@democonsulting.in / demo1234.
+# Every email the app sends (invoices, quotes, reminders, invites, meeting invites) shows up at http://localhost:8025.
 services:
   db:
     image: postgres:16-alpine
@@ -22,6 +23,10 @@ services:
       interval: 3s
       retries: 20
 
+  mailpit:
+    image: axllent/mailpit:v1.27
+    ports: ["8025:8025"]
+
   api:
     build: { context: ., dockerfile: apps/api/Dockerfile }
     environment:
@@ -32,10 +37,13 @@ services:
       SEED_DEMO: ${SEED_DEMO:-true}
       WEB_ORIGIN: http://localhost:3000
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      SMTP_URL: ${SMTP_URL:-smtp://mailpit:1025}
+      EMAIL_FROM: ${EMAIL_FROM:-Demo Consulting <billing@democonsulting.in>}
       PORT: 4000
     depends_on:
       db: { condition: service_healthy }
       redis: { condition: service_healthy }
+      mailpit: { condition: service_started }
     ports: ["4000:4000"]
 
   web:

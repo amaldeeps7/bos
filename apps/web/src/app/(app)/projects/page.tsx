@@ -1,19 +1,22 @@
 'use client';
+import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { fmtD, healthTone, inr } from '@bos/shared';
 import { useApp, useQ } from '@/lib/app';
 import { barColor, projStats } from '@/lib/domain';
 import type { Project } from '@/lib/types';
-import { Card, PageHead, badgeStyle } from '@/components/ui';
+import { Btn, Card, PageHead, badgeStyle } from '@/components/ui';
+import { ProjectDialog } from '@/components/forms';
 
 const Dot = () => <span style={{ width: 6, height: 6, borderRadius: 999, background: 'currentColor' }} />;
 const COLS = 'minmax(240px,2.2fr) minmax(150px,1.2fr) 120px minmax(150px,1fr) 130px 90px';
 
 export default function Projects() {
-  const { isMobile } = useApp(); const router = useRouter();
+  const { isMobile, has } = useApp(); const router = useRouter(); const [creating, setCreating] = useState(false);
   const projects = useQ<Project[]>('projects').data || [];
   return <>
-    <PageHead title="Projects" sub="Engagements, their milestones, and what's left to bill." />
+    <PageHead title="Projects" sub="Engagements, their milestones, and what's left to bill." right={has('project.create') && <Btn kind="pri" icon="plus" onClick={() => setCreating(true)}>New project</Btn>} />
+    {creating && <ProjectDialog onClose={() => setCreating(false)} />}
     {!isMobile ? (
       <Card style={{ overflowX: 'auto' }}>
         <div style={{ minWidth: 860 }}>

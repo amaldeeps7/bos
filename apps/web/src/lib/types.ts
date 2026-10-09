@@ -9,7 +9,7 @@ export interface Person { id: string; name: string; title: string; role: string;
 export interface TaskEvent { id: string; userId: string; kind: 'comment' | 'sys'; text: string; at: string }
 export interface Task { id: string; key: string; title: string; desc: string; projectId: string; assigneeId: string; reporterId: string; due: string; status: string; priority: string; events: TaskEvent[]; block: { start: number; dur: number } | null }
 export interface ActionItem { id: string; text: string; assigneeId: string; taskId: string | null }
-export interface Meeting { id: string; title: string; date: string; start: number; dur: number; projectId: string | null; loc: string; link: string; ext: string; agenda: string; notes: string; organizerId: string; attendees: string[]; actions: ActionItem[] }
+export interface Meeting { id: string; title: string; date: string; start: number; dur: number; projectId: string | null; loc: string; link: string; ext: string; agenda: string; notes: string; organizerId: string; attendees: string[]; guests: string[]; actions: ActionItem[] }
 export interface Approval { id: string; kind: string; docType: string | null; docId: string | null; ref: string; title: string; detail: string; amount: number | null; by: string; approver: string; age: string; status: 'waiting' | 'sent' | 'approved' | 'rejected' }
 export interface Milestone { id: string; seq: number; name: string; pct: number; value: number; status: string; due: string; changedAt: string | null }
 export interface Project { id: string; name: string; code: string; customerId: string; customer: string; bu: string; contract: number; endDate: string; health: string; status: string; ownerId: string; quoteId: string | null; createdAt: string; milestones: Milestone[] }
@@ -30,10 +30,12 @@ export interface Settings {
   modules: { id: string; name: string; desc: string; icon: string; on: boolean }[];
   security: any; policy: any; taxOpts: any; reminders: any; templates: any;
   entities: { id: string; name: string; gstin: string; pan: string; cin: string; address: string; bank: string; upi: string; isDefault: boolean; state: string }[];
-  units: { id: string; name: string; code: string; entity: string; head: string; projects: number }[];
-  users: { id: string; name: string; email: string; role: string; status: string; last: string }[];
+  units: { id: string; name: string; code: string; entity: string; entityId: string; headId: string | null; head: string; projects: number }[];
+  users: { id: string; name: string; email: string; title: string; role: string; status: string; last: string }[];
   roles: Role[];
   series: { type: string; label: string; prefix: string; pattern: string; padding: number; next: number; reset: string; sample: string }[];
   sac: { code: string; desc: string; rate: number; used: number }[];
 }
 export interface AiReply { text: string; bullets?: string[]; action?: { label: string; kind: 'navigate' | 'reassign' | 'copy' | 'remind'; payload?: Record<string, string> } }
+export interface SearchHit { type: string; id: string; title: string; sub: string; href?: string; open?: 'task' | 'meeting' }
+export interface SearchResult { q: string; groups: { type: string; label: string; hits: SearchHit[] }[] }

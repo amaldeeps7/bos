@@ -1,4 +1,6 @@
-import { BadRequestException, Body, Controller, Get, HttpCode, NotFoundException, Param, Post } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, HttpCode, NotFoundException, Param, Patch, Post, Res } from '@nestjs/common';
+import type { Response } from 'express';
+import { DocumentsService, mailNote } from './documents.service';
 import { UNISSUED, inr } from '@bos/shared';
 import { PrismaService } from '../core/prisma.service';
 import { AccessService } from '../core/access.service';
@@ -16,7 +18,13 @@ const METHODS = ['NEFT', 'RTGS', 'IMPS', 'UPI', 'Cheque'] as const;
 @Controller('invoices')
 export class InvoicesController {
   constructor(private prisma: PrismaService, private fin: FinanceService, private audit: AuditService, private access: AccessService,
-    private numbering: NumberingService, private approvals: ApprovalsService, private notify: NotifyService) {}
+    private numbering: NumberingService, private approvals: ApprovalsService, private notify: NotifyService, private docs: DocumentsService) {}
+
+  @Get(':id/pdf') @Perm('invoice.read')
+  async pdf(@Param('id') id: string, @Res() res: Response) {
+    const { buffer, filename } = await this.docs.invoicePdf(id);
+    res.set({ 'Content-Type': 'application/pdf', 'Content-Disposition': `inline; filename="${filename}"` }).send(buffer);
+  }
 
   private async one(id: string) { const i = await this.prisma.invoice.findUnique({ where: { id }, include: { customer: true } }); if (!i) throw new NotFoundException('Invoice not found'); return i; }
 
@@ -82,10 +90,13 @@ export class InvoicesController {
         return { message: `${i.no} issued. Figures are now locked.` };
       }
       case 'send': {
-        need(['ISSUED']); const who = await this.access.actor(me, 'invoice.send');
-        await this.prisma.invoice.update({ where: { id }, data: { status: 'SENT' } });
-        await this.audit.log(who, `${who.name} sent ${i.no} to ${i.customer.name}`, 'icon-mail', 'invoice');
-        return { message: `${i.no} emailed to ${i.customer.email}.` };
+        need(['ISSUED', 'SENT', 'PARTIALLY_PAID']); const who = await this.access.actor(me, 'invoice.send');
+        if (!i.customer.email) throw new BadRequestException(`${i.customer.name} has no billing email. Add one on the customer first.`);
+        const r = await this.docs.emailInvoice(id, me.id);
+        if (!r.ok && !r.error?.includes('not configured')) throw new BadRequestException(`Couldn’t email ${i.no}: ${r.error}`);
+        if (i.status === 'ISSUED') await this.prisma.invoice.update({ where: { id }, data: { status: 'SENT' } });
+        await this.audit.log(who, `${who.name} ${i.status === 'ISSUED' ? 'sent' : 'resent'} ${i.no} to ${i.customer.name}`, 'icon-mail', 'invoice');
+        return { message: r.ok ? `${i.no} emailed to ${i.customer.email} with the PDF attached.` : `${i.no} marked as sent.${mailNote(r)}` };
       }
       case 'cancel': {
         AccessService.require(me, 'invoice.cancel'); need(['DRAFT', 'PENDING_APPROVAL', 'APPROVED']);
@@ -96,10 +107,11 @@ export class InvoicesController {
       }
       case 'remind': {
         if (f.bal <= 0) throw new BadRequestException('Nothing is outstanding on this invoice');
+        if (!i.customer.email) throw new BadRequestException(`${i.customer.name} has no billing email.`);
+        const r = await this.docs.emailReminder(id, me.id, f.overdue);
         await this.audit.log(me, `Sent a payment reminder for ${i.no} to ${i.customer.email}`, 'icon-bell-ring', 'invoice');
-        return { message: `Reminder sent to ${i.customer.email}.` };
+        return { message: r.ok ? `Reminder sent to ${i.customer.email}.` : `Reminder not sent.${mailNote(r)}` };
       }
-      case 'pdf': return { message: `${i.no}.pdf downloaded.` };
       default: throw new BadRequestException('Unknown action');
     }
   }
@@ -107,7 +119,7 @@ export class InvoicesController {
 
 @Controller('payments')
 export class PaymentsController {
-  constructor(private prisma: PrismaService, private fin: FinanceService, private audit: AuditService, private access: AccessService, private numbering: NumberingService, private notify: NotifyService) {}
+  constructor(private prisma: PrismaService, private fin: FinanceService, private audit: AuditService, private access: AccessService, private numbering: NumberingService, private notify: NotifyService, private docs: DocumentsService) {}
 
   @Get() @Perm('payment.read')
   async list() {
@@ -144,15 +156,37 @@ export class PaymentsController {
   async remindOverdue(@Me() me: AuthUser) {
     const c = await this.fin.ctx();
     const od = (await this.prisma.invoice.findMany()).filter(i => this.fin.invInfo(i, c).overdue);
-    const n = new Set(od.map(i => i.customerId)).size;
-    if (n) await this.audit.log(me, `Sent overdue reminders to ${n} customer${n > 1 ? 's' : ''}`, 'icon-bell-ring', 'payment');
-    return { message: n ? `Reminders sent to ${n} customer${n > 1 ? 's' : ''} with overdue invoices.` : 'Nobody is overdue.' };
+    if (!od.length) return { message: 'Nobody is overdue.' };
+    const results = [];
+    for (const i of od) results.push(await this.docs.emailReminder(i.id, me.id, true));
+    const sent = results.filter(r => r.ok).length; const n = new Set(od.map(i => i.customerId)).size;
+    await this.audit.log(me, `Sent overdue reminders for ${od.length} invoice${od.length > 1 ? 's' : ''} to ${n} customer${n > 1 ? 's' : ''}`, 'icon-bell-ring', 'payment');
+    return { message: sent === od.length ? `Reminders sent to ${n} customer${n > 1 ? 's' : ''} with overdue invoices.` : `${sent} of ${od.length} reminders sent.${mailNote(results.find(r => !r.ok)!)}` };
+  }
+
+  /** Corrects a recorded receipt's method, reference or date. Amounts are changed by reversing instead. */
+  @Patch(':id') @Perm('payment.update')
+  async update(@Me() me: AuthUser, @Param('id') id: string, @Body() b: any) {
+    const p = await this.prisma.payment.findUnique({ where: { id } }); if (!p) throw new NotFoundException();
+    const data: any = {};
+    if (b.method !== undefined) data.method = oneOf(b.method, 'Method', METHODS);
+    if (b.ref !== undefined) data.ref = str(b.ref, 'Reference', { max: 100 }).trim() || '—';
+    if (b.date !== undefined) data.date = toDate(b.date);
+    await this.prisma.payment.update({ where: { id }, data });
+    await this.audit.log(me, `Corrected the details of ${p.no}`, 'icon-wallet', 'payment');
+    return { message: `${p.no} updated.` };
   }
 }
 
 @Controller('credit-notes')
 export class CreditNotesController {
-  constructor(private prisma: PrismaService, private fin: FinanceService, private audit: AuditService, private access: AccessService, private numbering: NumberingService) {}
+  constructor(private prisma: PrismaService, private fin: FinanceService, private audit: AuditService, private access: AccessService, private numbering: NumberingService, private docs: DocumentsService) {}
+
+  @Get(':id/pdf') @Perm('credit_note.read')
+  async pdf(@Param('id') id: string, @Res() res: Response) {
+    const { buffer, filename } = await this.docs.creditPdf(id);
+    res.set({ 'Content-Type': 'application/pdf', 'Content-Disposition': `inline; filename="${filename}"` }).send(buffer);
+  }
 
   @Get() @Perm('credit_note.read')
   async list() {
@@ -173,13 +207,14 @@ export class CreditNotesController {
     const reason = str(b.reason, 'Reason', { max: 1000 }).trim();
     if (!reason) throw new BadRequestException('Give a reason. It prints on the credit note.');
     const total = Math.min(taxable + Math.round(taxable * 0.18), f.bal);
-    const no = await this.prisma.$transaction(async tx => {
+    const cn = await this.prisma.$transaction(async tx => {
       const no = await this.numbering.next('CREDIT_NOTE', tx);
-      await tx.creditNote.create({ data: { no, invoiceId: inv.id, date: toDate(c.today), taxable, total, reason } });
+      const cn = await tx.creditNote.create({ data: { no, invoiceId: inv.id, date: toDate(c.today), taxable, total, reason } });
       if (total >= f.bal) await tx.invoice.update({ where: { id: inv.id }, data: { status: 'PAID' } });
-      return no;
+      return cn;
     });
-    await this.audit.log(who, `Issued ${no} against ${inv.no}${who.demo ? ` (demo, by ${me.name})` : ''}`, 'icon-receipt', 'invoice');
-    return { message: `${no} issued. ${inr(total)} off ${inv.no}.` };
+    await this.audit.log(who, `Issued ${cn.no} against ${inv.no}${who.demo ? ` (demo, by ${me.name})` : ''}`, 'icon-receipt', 'invoice');
+    const r = await this.docs.emailCredit(cn.id, me.id);
+    return { message: `${cn.no} issued. ${inr(total)} off ${inv.no}.${r.ok ? ' Emailed to the customer.' : mailNote(r)}` };
   }
 }

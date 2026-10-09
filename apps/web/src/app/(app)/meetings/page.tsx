@@ -5,7 +5,7 @@ import { useAct, useApp, useQ } from '@/lib/app';
 import { isNow, isPast } from '@/lib/domain';
 import type { Meeting, Project } from '@/lib/types';
 import { Avatar, Badge, Btn, Card, Icon, PageHead, Tabs } from '@/components/ui';
-import { useOpenNewMeeting } from '@/components/dialogs';
+import { meetDraftOf, useOpenNewMeeting } from '@/components/dialogs';
 import { openLink } from '@/components/overlays';
 
 type Tab = 'upcoming' | 'past' | 'follow';
@@ -24,7 +24,7 @@ export default function Meetings() {
   const days = [...new Set(list.map(m => m.date))];
   const wd = (d: string) => DAYS[new Date(d + 'T00:00:00Z').getUTCDay()];
   const cancel = async (m: Meeting) => { if (!confirm(`Cancel “${m.title}”? Attendees will be notified.`)) return; const r = await act(`meetings/${m.id}`, undefined, { method: 'DELETE', quiet: true }); if (r) toast(`“${m.title}” cancelled. Attendees notified.`); };
-  const edit = (m: Meeting) => setUi({ meetDialog: { id: m.id, title: m.title, p: m.projectId || '', date: m.date, start: String(m.start), dur: String(m.dur), who: [...m.attendees], loc: m.loc, link: m.link } });
+  const edit = (m: Meeting) => setUi({ meetDialog: meetDraftOf(m) });
   return <>
     <PageHead title="Meetings" sub={`${meetings.filter(m => !past(m)).length} upcoming · ${meetings.filter(defs.follow).length} need follow-up`} right={<Btn kind="pri" icon="plus" onClick={() => newMeeting()}>New meeting</Btn>} />
     <Tabs tabs={([['upcoming', 'Upcoming'], ['past', 'Past'], ['follow', 'Needs follow-up']] as [Tab, string][]).map(([id, label]) => ({ id, label, count: meetings.filter(defs[id]).length }))} value={tab} onChange={setTab} />

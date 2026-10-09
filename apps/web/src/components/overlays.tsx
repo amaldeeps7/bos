@@ -6,6 +6,7 @@ import { useAct, useApp, useQ } from '@/lib/app';
 import { dueInfo, isNow, isPast, provider } from '@/lib/domain';
 import type { Meeting, Project, Task } from '@/lib/types';
 import { Avatar, Badge, Icon, TONES } from './ui';
+import { meetDraftOf } from './dialogs';
 
 function Drawer({ onClose, children }: { onClose: () => void; children: ReactNode }) {
   useEffect(() => { const k = (e: KeyboardEvent) => e.key === 'Escape' && onClose(); window.addEventListener('keydown', k); return () => window.removeEventListener('keydown', k); }, [onClose]);
@@ -55,7 +56,8 @@ function TaskPanelInner({ t }: { t: Task }) {
         <span style={{ color: '#cbd5e1' }}>/</span>
         <button className="quiet ellipsis" onClick={() => { close(); router.push(`/projects/${t.projectId}`); }} style={{ minWidth: 0 }}>{p?.name} · {p?.customer}</button>
         <span style={{ flex: 1 }} />
-        <button onClick={copy} aria-label="Copy link" className="ghost-icon" style={{ width: 32, height: 32, flex: 'none' }}><Icon name="link" size={16} /></button>
+        <button onClick={copy} aria-label="Copy link" title="Copy link" className="ghost-icon" style={{ width: 32, height: 32, flex: 'none' }}><Icon name="link" size={16} /></button>
+        {has('task.delete') && <button onClick={async () => { if (confirm(`Delete ${t.key} “${t.title}”? This can't be undone.`)) { const r = await act(`tasks/${t.id}`, undefined, { method: 'DELETE', msg: `${t.key} deleted.` }); if (r) close(); } }} aria-label="Delete task" title="Delete task" className="ghost-icon" style={{ width: 32, height: 32, flex: 'none' }}><Icon name="trash-2" size={16} /></button>}
         <CloseX onClick={close} />
       </div>
       <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '20px 24px 24px', display: 'flex', flexDirection: 'column', gap: 22 }}>
@@ -135,6 +137,7 @@ function MeetingPanelInner({ m }: { m: Meeting }) {
   const agenda = useDraft(m.agenda, v => patch({ agenda: v }));
   const notes = useDraft(m.notes, v => patch({ notes: v }));
   const link = useDraft(m.link, v => patch({ link: v.trim() }));
+  const title = useDraft(m.title, v => v.trim() && patch({ title: v.trim() }));
   const past = isPast(m, today, now); const live = isNow(m, today, now);
   const tasks = useQ<Task[]>('tasks').data || [];
   const add = async () => { const text = ma.text.trim(); if (!text) return; await act(`meetings/${m.id}/actions`, { text, assigneeId: ma.a }, { quiet: true }); setMa({ ...ma, text: '' }); };
@@ -148,12 +151,12 @@ function MeetingPanelInner({ m }: { m: Meeting }) {
         <span style={{ fontSize: 13, color: '#64748b' }}>Meeting</span>
         <Badge tone={live ? 'success' : past ? 'neutral' : 'primary'}>{live ? 'In progress' : past ? 'Ended' : 'Upcoming'}</Badge>
         <span style={{ flex: 1 }} />
-        {!past && <button className="outline-blue" onClick={() => setUi({ meetId: null, meetDialog: { id: m.id, title: m.title, p: m.projectId || '', date: m.date, start: String(m.start), dur: String(m.dur), who: [...m.attendees], loc: m.loc, link: m.link } })} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, height: 32, padding: '0 10px', border: '1px solid #e2e8f0', borderRadius: 8, background: '#fff', color: '#0f172a', fontSize: 13, fontWeight: 500, cursor: 'pointer', whiteSpace: 'nowrap' }}><Icon name="calendar-clock" size={14} />Reschedule</button>}
+        {!past && <button className="outline-blue" onClick={() => setUi({ meetId: null, meetDialog: meetDraftOf(m) })} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, height: 32, padding: '0 10px', border: '1px solid #e2e8f0', borderRadius: 8, background: '#fff', color: '#0f172a', fontSize: 13, fontWeight: 500, cursor: 'pointer', whiteSpace: 'nowrap' }}><Icon name="calendar-clock" size={14} />Reschedule</button>}
         <CloseX onClick={close} />
       </div>
       <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '20px 24px 28px', display: 'flex', flexDirection: 'column', gap: 22 }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-          <h2 style={{ margin: 0, fontSize: 20, fontWeight: 600, letterSpacing: '-0.015em', lineHeight: 1.3, textWrap: 'pretty' as any }}>{m.title}</h2>
+          <textarea {...title} rows={1} aria-label="Meeting title" className="title-edit" disabled={past} style={{ border: '1px solid transparent', borderRadius: 8, margin: '-6px -8px', padding: '6px 8px', fontFamily: 'inherit', fontSize: 20, fontWeight: 600, letterSpacing: '-0.015em', lineHeight: 1.3, color: '#0f172a', resize: 'none', outlineColor: '#0052ff', background: 'transparent' }} />
           <p style={{ margin: 0, fontSize: 14, color: '#475569' }}>{dayLabel(m.date, today)} · {fmtT(m.start)} – {fmtT(m.start + m.dur)} ({hm(m.dur)})</p>
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: '100px minmax(0,1fr)', gap: '12px 16px', alignItems: 'center', fontSize: 14 }}>
@@ -166,7 +169,9 @@ function MeetingPanelInner({ m }: { m: Meeting }) {
           <span style={{ color: '#64748b', alignSelf: 'start', paddingTop: 4 }}>Attendees</span>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
             {m.attendees.map(w => { const p = person(w); return <span key={w} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, height: 30, padding: '0 10px 0 4px', border: '1px solid #e2e8f0', borderRadius: 999, fontSize: 13 }}><Avatar name={p.name} size={22} style={{ fontSize: 10 }} />{w === me.user.id ? 'You' : p.name}</span>; })}
+            {(m.guests || []).map(g => <span key={g} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, height: 30, padding: '0 10px', border: '1px solid #e2e8f0', background: '#f8fafc', color: '#334155', borderRadius: 999, fontSize: 13 }}><Icon name="mail" size={13} />{g}</span>)}
             {m.ext && <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, height: 30, padding: '0 10px', border: '1px solid rgba(0,82,255,.18)', background: '#eef4ff', color: '#0052ff', borderRadius: 999, fontSize: 13 }}><Icon name="building" size={13} />{m.ext}</span>}
+            {!past && <button onClick={() => setUi({ meetId: null, meetDialog: meetDraftOf(m) })} className="outline-blue" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, height: 30, padding: '0 10px', border: '1px dashed #cbd5e1', borderRadius: 999, background: '#fff', color: '#64748b', fontSize: 13, cursor: 'pointer' }}><Icon name="user-plus" size={13} />Add people</button>}
           </div>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>

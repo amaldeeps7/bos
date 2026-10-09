@@ -7,8 +7,10 @@ import { AuditService } from './audit.service';
 import { NotifyService } from './notify.service';
 import { NumberingService } from './numbering.service';
 import { OrgService } from './org.service';
+import { MailService } from './mail.service';
+import { PdfService } from './pdf.service';
 
-const services = [PrismaService, RedisService, AccessService, AuditService, NotifyService, NumberingService, OrgService];
+const services = [PrismaService, RedisService, AccessService, AuditService, NotifyService, NumberingService, OrgService, MailService, PdfService];
 
 @Global()
 @Module({

@@ -27,3 +27,9 @@ test('date and time helpers', () => {
   assert.equal(fmtT(14.5), '2:30 pm'); assert.equal(hm(0.75), '45 min'); assert.equal(hm(1.5), '1h 30m');
   assert.equal(inr(377600), '₹3,77,600');
 });
+import { rupeesInWords, inWords } from './words';
+test('amounts in words, Indian style', () => {
+  assert.equal(rupeesInWords(377600), 'Rupees three lakh seventy-seven thousand six hundred only');
+  assert.equal(inWords(11328000), 'one crore thirteen lakh twenty-eight thousand');
+  assert.equal(inWords(101), 'one hundred one');
+});

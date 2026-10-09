@@ -8,10 +8,10 @@ import type { Me, Person, Role } from './types';
 /** UI state shared across screens: overlays, dialogs, assistant, toast, role preview. */
 export interface Ui {
   taskId: string | null; meetId: string | null;
-  meetDialog: MeetDraft | null; newTask: { projectId: string } | null; newCustomer: boolean;
+  meetDialog: MeetDraft | null; newTask: { projectId: string } | null; customer: string | null; search: boolean;
   pay: string | null; credit: string | null; aiOpen: boolean | null; notifOpen: boolean; viewAs: string | null;
 }
-export interface MeetDraft { id?: string; title: string; p: string; date: string; start: string; dur: string; who: string[]; loc: string; link: string }
+export interface MeetDraft { id?: string; title: string; p: string; date: string; start: string; dur: string; who: string[]; guests: string[]; loc: string; link: string }
 
 interface Ctx {
   me: Me; people: Map<string, Person>; person: (id?: string | null) => Person;
@@ -60,7 +60,7 @@ function Inner({ children }: { children: ReactNode }) {
   const admin = !!me && ['settings.manage', 'role.manage'].some(p => me.user.perms.includes(p));
   const rolesQ = useQ<{ roles: Role[] }>(admin ? 'settings' : null);
   const width = useWidth();
-  const [ui, setUiState] = useState<Ui>({ taskId: null, meetId: null, meetDialog: null, newTask: null, newCustomer: false, pay: null, credit: null, aiOpen: null, notifOpen: false, viewAs: null });
+  const [ui, setUiState] = useState<Ui>({ taskId: null, meetId: null, meetDialog: null, newTask: null, customer: null, search: false, pay: null, credit: null, aiOpen: null, notifOpen: false, viewAs: null });
   const setUi = useCallback((p: Partial<Ui> | ((u: Ui) => Partial<Ui>)) => setUiState(u => ({ ...u, ...(typeof p === 'function' ? p(u) : p) })), []);
   const [toastMsg, setToast] = useState(''); const tt = useRef<ReturnType<typeof setTimeout>>(undefined);
   const toast = useCallback((m: string) => { clearTimeout(tt.current); setToast(m); tt.current = setTimeout(() => setToast(''), 2800); }, []);

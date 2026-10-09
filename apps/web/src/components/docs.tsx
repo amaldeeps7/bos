@@ -77,7 +77,7 @@ export function DocView({ kind, id }: { kind: 'quote' | 'invoice'; id: string })
     if (q.status === 'PENDING_APPROVAL') approveBtns();
     if (q.status === 'APPROVED') actorBtn('quote.send', 'Send to customer', 'icon-mail', 'send', 'Send');
     if (q.status === 'SENT') { has('quote.update') && add('Revise', 'icon-pencil', 'sec', () => router.push(`/quotes/${q.id}/edit`)); add('Customer declined', 'icon-x', 'sec', () => run('decline')); add('Customer accepted', 'icon-check', 'pri', () => run('accept')); }
-    if (q.status !== 'DRAFT') add('PDF', 'icon-download', 'sec', () => run('pdf'));
+    add('PDF', 'icon-download', 'sec', () => window.open(`/api/quotes/${q.id}/pdf`, '_blank'));
     if (q.status === 'DRAFT' && q.rejected) banner = { tone: 'danger', icon: 'icon-undo-2', title: 'Sent back for changes.', text: q.rejected };
     if (q.status === 'PENDING_APPROVAL') banner = { tone: 'warning', icon: 'icon-hourglass', title: mine ? `${person(q.byId).name} needs your approval.` : `Waiting on ${appr?.approverName || 'the Owner'}.`, text: k.maxDisc > me.org.discLimit ? `A ${k.maxDisc}% discount is above the ${me.org.discLimit}% limit, so a second person signs off. Whoever raises a quotation can't approve it.` : 'Routed by approval policy.' };
     if (q.status === 'ACCEPTED') banner = { tone: 'success', icon: 'icon-circle-check', title: 'The customer accepted this quotation.', text: 'Turn it into a project with milestones, or bill it in full now.', actions: [
@@ -104,7 +104,8 @@ export function DocView({ kind, id }: { kind: 'quote' | 'invoice'; id: string })
     if (i.overdue) pay();
     if (i.projectId) add('Project', 'icon-folder-kanban', 'sec', () => router.push(`/projects/${i.projectId}`));
     if (!UNISSUED.includes(i.status) && i.bal > 0 && has('credit_note.create')) add('Credit note', 'icon-receipt', 'sec', () => setUi({ credit: i.id }));
-    if (!UNISSUED.includes(i.status)) add('PDF', 'icon-download', 'sec', () => run('pdf'));
+    if (['SENT', 'PARTIALLY_PAID'].includes(i.status) && actors['invoice.send']?.self) add('Email again', 'icon-mail', 'sec', () => run('send'));
+    add('PDF', 'icon-download', 'sec', () => window.open(`/api/invoices/${i.id}/pdf`, '_blank'));
     if (i.status === 'DRAFT') banner = i.rejected ? { tone: 'danger', icon: 'icon-undo-2', title: 'Sent back for changes.', text: i.rejected } : { tone: 'neutral', icon: 'icon-file-pen', title: 'Draft — not yet sent anywhere.', text: 'Submit it and Finance approves before it is issued.' };
     if (i.status === 'PENDING_APPROVAL') banner = { tone: 'warning', icon: 'icon-hourglass', title: mine ? `${person(i.byId).name} needs your approval to issue this.` : `Waiting on ${appr?.approverName || 'Finance'}.`, text: 'Whoever raises an invoice can’t approve it themselves.' };
     if (i.status === 'APPROVED') banner = { tone: 'info', icon: 'icon-badge-check', title: 'Approved — ready to issue.', text: 'Issuing locks the figures. After that, corrections go on a credit note.' };

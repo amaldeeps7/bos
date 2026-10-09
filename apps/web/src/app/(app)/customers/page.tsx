@@ -15,7 +15,7 @@ export default function Customers() {
   const qy = q.trim().toLowerCase();
   const rows = all.filter(c => !qy || (c.name + c.gstin + c.city).toLowerCase().includes(qy));
   return <>
-    <PageHead title="Customers" sub="Who you bill, their GST details, and what they owe." right={has('customer.create') && <Btn kind="pri" icon="plus" onClick={() => setUi({ newCustomer: true })}>Add customer</Btn>} />
+    <PageHead title="Customers" sub="Who you bill, their GST details, and what they owe." right={has('customer.create') && <Btn kind="pri" icon="plus" onClick={() => setUi({ customer: 'new' })}>Add customer</Btn>} />
     <div style={{ display: 'flex', alignItems: 'center', gap: 8, height: 40, width: '100%', maxWidth: 380, padding: '0 12px', border: '1px solid #cbd5e1', borderRadius: 8, background: '#fff' }}>
       <Icon name="search" size={15} style={{ color: '#94a3b8' }} />
       <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search by name, GSTIN or city" style={{ flex: 1, minWidth: 0, border: 0, outline: 0, background: 'transparent', fontSize: 14 }} />

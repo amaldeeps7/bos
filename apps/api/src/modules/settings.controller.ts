@@ -7,6 +7,9 @@ import { OrgService } from '../core/org.service';
 import { Me, Perm } from '../core/decorators';
 import type { AuthUser } from '../core/auth.types';
 import { num, oneOf, str } from '../core/util';
+import { MailService, fill, htmlOf } from '../core/mail.service';
+import { randomBytes } from 'crypto';
+import * as bcrypt from 'bcryptjs';
 
 const anyAdmin = (me: AuthUser) => {
   if (!['settings.manage', 'role.manage', 'role.read', 'user.read'].some(p => AccessService.has(me, p))) throw new ForbiddenException('You can’t open settings');
@@ -15,7 +18,7 @@ const lastActive = (x: Date | null) => (!x ? '—' : Date.now() - x.getTime() < 
 
 @Controller('settings')
 export class SettingsController {
-  constructor(private prisma: PrismaService, private access: AccessService, private audit: AuditService, private orgs: OrgService) {}
+  constructor(private prisma: PrismaService, private access: AccessService, private audit: AuditService, private orgs: OrgService, private mail: MailService) {}
 
   private async org() { return this.prisma.organization.findUniqueOrThrow({ where: { id: 'org' } }); }
   private async patchJson(field: 'security' | 'policy' | 'taxOpts' | 'reminders' | 'templates' | 'modules', patch: Record<string, unknown>) {
@@ -39,8 +42,8 @@ export class SettingsController {
       modules: MODULES.map(m => ({ ...m, on: (org.modules as any)[m.id] !== false })),
       security: org.security, policy: org.policy, taxOpts: org.taxOpts, reminders: org.reminders, templates: org.templates,
       entities: entities.map(e => ({ ...e, state: stateOf(e.gstin) || 'Unrecognised code' })),
-      units: units.map(u => ({ id: u.id, name: u.name, code: u.code, entity: u.entity.name, head: u.head?.name || 'Not set', projects: projects.filter(p => p.bu === u.name).length })),
-      users: users.map(u => ({ id: u.id, name: u.name, email: u.email, role: u.role.name, status: u.status, last: u.status === 'Invited' ? '—' : lastActive(u.lastActiveAt) })),
+      units: units.map(u => ({ id: u.id, name: u.name, code: u.code, entity: u.entity.name, entityId: u.entityId, headId: u.headId, head: u.head?.name || 'Not set', projects: projects.filter(p => p.bu === u.name).length })),
+      users: users.map(u => ({ id: u.id, name: u.name, email: u.email, title: u.title, role: u.role.name, status: u.status, last: u.status === 'Invited' ? '—' : lastActive(u.lastActiveAt) })),
       roles: roles.map(r => ({ id: r.id, name: r.name, desc: r.desc, builtIn: r.builtIn, perms: r.builtIn ? ALL_PERMS : r.perms })),
       series: ['INVOICE', 'QUOTATION', 'CREDIT_NOTE', 'RECEIPT', 'PROJECT'].map(t => series.find(s => s.type === t)!).filter(Boolean).map(s => ({ ...s, sample: formatNumber(s, today, org.fyStart) })),
       sac: sac.map(x => ({ ...x, used: catalog.filter(c => c.sac === x.code).length })),
@@ -92,6 +95,30 @@ export class SettingsController {
     return { message: `${name} added. Its numbering starts with the first document it issues.` };
   }
 
+  @Patch('units/:id') @Perm('settings.manage')
+  async editUnit(@Me() me: AuthUser, @Param('id') id: string, @Body() b: any) {
+    const u = await this.prisma.businessUnit.findUniqueOrThrow({ where: { id } }); const data: any = {};
+    if (b.name !== undefined) { data.name = str(b.name, 'Name', { max: 80 }).trim(); if (!data.name) throw new BadRequestException('Name the unit.'); }
+    if (b.code !== undefined) data.code = str(b.code, 'Code', { max: 4 }).toUpperCase();
+    if (b.headId !== undefined) data.headId = b.headId || null;
+    if (b.entityId !== undefined) data.entityId = String(b.entityId);
+    await this.prisma.$transaction(async tx => {
+      await tx.businessUnit.update({ where: { id }, data });
+      if (data.name && data.name !== u.name) await tx.project.updateMany({ where: { bu: u.name }, data: { bu: data.name } });
+    });
+    await this.audit.log(me, `Updated business unit ${data.name || u.name}`, 'icon-network');
+    return { message: `${data.name || u.name} saved.` };
+  }
+
+  @Delete('units/:id') @Perm('settings.manage')
+  async deleteUnit(@Me() me: AuthUser, @Param('id') id: string) {
+    const u = await this.prisma.businessUnit.findUniqueOrThrow({ where: { id } });
+    if (await this.prisma.project.count({ where: { bu: u.name } })) throw new BadRequestException('Move its projects to another unit first.');
+    await this.prisma.businessUnit.delete({ where: { id } });
+    await this.audit.log(me, `Removed business unit ${u.name}`, 'icon-trash-2');
+    return { message: `${u.name} removed.` };
+  }
+
   // modules
   @Patch('modules/:id') @Perm('settings.manage')
   async module(@Me() me: AuthUser, @Param('id') id: string, @Body() b: any) {
@@ -104,19 +131,36 @@ export class SettingsController {
 
   // users
   @Patch('users/:id') @Perm('user.manage')
-  async userRole(@Me() me: AuthUser, @Param('id') id: string, @Body() b: any) {
-    const role = await this.prisma.role.findUnique({ where: { name: str(b.role, 'Role', { required: true }) } }); if (!role) throw new BadRequestException('Unknown role');
-    if (id === me.id) throw new BadRequestException('You can’t change your own role');
-    const u = await this.prisma.user.update({ where: { id }, data: { roleId: role.id } });
-    await this.audit.log(me, `Changed ${u.name} to ${role.name}`, 'icon-user-cog', 'access');
-    return { message: `${u.name.split(' ')[0]} is now ${role.name}.` };
+  async userUpdate(@Me() me: AuthUser, @Param('id') id: string, @Body() b: any) {
+    const before = await this.prisma.user.findUniqueOrThrow({ where: { id } });
+    const data: any = {}; const msgs: string[] = [];
+    if (b.role !== undefined) {
+      const role = await this.prisma.role.findUnique({ where: { name: str(b.role, 'Role', { required: true }) } }); if (!role) throw new BadRequestException('Unknown role');
+      if (id === me.id && role.id !== me.roleId) throw new BadRequestException('You can’t change your own role');
+      if (role.id !== before.roleId) { data.roleId = role.id; msgs.push(`${before.name.split(' ')[0]} is now ${role.name}.`); await this.audit.log(me, `Changed ${before.name} to ${role.name}`, 'icon-user-cog', 'access'); }
+    }
+    if (b.name !== undefined) { data.name = str(b.name, 'Name', { max: 120 }).trim(); if (!data.name) throw new BadRequestException('Enter a name.'); }
+    if (b.title !== undefined) data.title = str(b.title, 'Job title', { max: 120 }).trim();
+    if (b.password) {
+      const org = await this.org(); const min = Number((org.security as any).pwd) || 12;
+      if (String(b.password).length < min) throw new BadRequestException(`The password must be at least ${min} characters.`);
+      data.passwordHash = await bcrypt.hash(String(b.password), 10); msgs.push('Password reset.');
+      await this.audit.log(me, `Reset the password for ${before.name}`, 'icon-key-round', 'access');
+    }
+    await this.prisma.user.update({ where: { id }, data });
+    if (data.name || data.title !== undefined) await this.audit.log(me, `Updated ${data.name || before.name}'s details`, 'icon-user-cog', 'access');
+    return { message: msgs.join(' ') || `${data.name || before.name} saved.` };
   }
 
   @Post('users/:id/toggle') @HttpCode(200) @Perm('user.read')
   async userToggle(@Me() me: AuthUser, @Param('id') id: string) {
     if (id === me.id) throw new BadRequestException('You can’t deactivate yourself');
     const u = await this.prisma.user.findUniqueOrThrow({ where: { id } });
-    if (u.status === 'Invited') { AccessService.require(me, 'user.invite'); await this.audit.log(me, `Resent the invitation to ${u.email}`, 'icon-user-plus', 'access'); return { message: `Invitation resent to ${u.email}.` }; }
+    if (u.status === 'Invited') {
+      AccessService.require(me, 'user.invite'); const r = await this.sendInvite(u.id, me);
+      await this.audit.log(me, `Resent the invitation to ${u.email}`, 'icon-user-plus', 'access');
+      return { message: r.ok ? `Invitation resent to ${u.email}.` : `Invitation not sent: ${r.error}` };
+    }
     AccessService.require(me, 'user.manage');
     const status = u.status === 'Active' ? 'Deactivated' : 'Active';
     await this.prisma.user.update({ where: { id }, data: { status } });
@@ -124,19 +168,54 @@ export class SettingsController {
     return { message: status === 'Active' ? `${u.name} can sign in again.` : `${u.name} is signed out everywhere. Their records stay.` };
   }
 
-  @Post('users/invite') @Perm('user.invite')
-  async invite(@Me() me: AuthUser, @Body() b: any) {
-    const email = str(b.email, 'Email', { max: 200 }).trim().toLowerCase();
+  private webOrigin() { return (process.env.WEB_ORIGIN || 'http://localhost:3000').split(',')[0].replace(/\/$/, ''); }
+  private async checkEmail(email: string) {
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw new BadRequestException('Enter a valid email address.');
     const org = await this.org();
     const doms = String((org.security as any).domains || '').split(',').map(x => x.trim().toLowerCase()).filter(Boolean);
     if (doms.length && !doms.includes(email.split('@')[1])) throw new BadRequestException(`Only ${doms.join(', ')} addresses can join (Settings → Security).`);
     if (await this.prisma.user.findUnique({ where: { email } })) throw new BadRequestException('That person is already in this workspace.');
+    return org;
+  }
+  /** Emails a link to set a password and join. Valid for 7 days. */
+  private async sendInvite(userId: string, by: AuthUser) {
+    const token = randomBytes(24).toString('hex');
+    const u = await this.prisma.user.update({ where: { id: userId }, data: { inviteToken: token, inviteExpiry: new Date(Date.now() + 7 * 86400_000) }, include: { role: true } });
+    const org = await this.org(); const link = `${this.webOrigin()}/accept-invite?token=${token}`;
+    const text = `Hi,\n\n${by.name} has invited you to join ${org.name} on Business OS as ${u.role.name}.\n\nSet your password and sign in here (the link works for 7 days):\n${link}\n\nIf you weren't expecting this, you can ignore this email.`;
+    return this.mail.send({ to: u.email, subject: `${by.name} invited you to ${org.name}`, text, html: htmlOf(text), replyTo: by.email, kind: 'invite', ref: u.email, userId: by.id });
+  }
+
+  @Post('users/invite') @Perm('user.invite')
+  async invite(@Me() me: AuthUser, @Body() b: any) {
+    const email = str(b.email, 'Email', { max: 200 }).trim().toLowerCase();
+    await this.checkEmail(email);
     const role = await this.prisma.role.findUnique({ where: { name: str(b.role, 'Role', { required: true }) } }); if (!role) throw new BadRequestException('Unknown role');
     const local = email.split('@')[0];
-    await this.prisma.user.create({ data: { email, name: local.charAt(0).toUpperCase() + local.slice(1), roleId: role.id, status: 'Invited' } });
+    const u = await this.prisma.user.create({ data: { email, name: str(b.name, 'Name', { max: 120 }).trim() || local.charAt(0).toUpperCase() + local.slice(1), roleId: role.id, status: 'Invited' } });
+    const r = await this.sendInvite(u.id, me);
     await this.audit.log(me, `Invited ${email} as ${role.name}`, 'icon-user-plus', 'access');
-    return { message: `Invitation sent to ${email}.` };
+    return { message: r.ok ? `Invitation emailed to ${email}.` : `${email} added as invited, but the email wasn’t sent: ${r.error}` };
+  }
+
+  /** Adds someone directly with a password the admin sets; they can sign in straight away. */
+  @Post('users') @Perm('user.manage')
+  async addUser(@Me() me: AuthUser, @Body() b: any) {
+    const email = str(b.email, 'Email', { max: 200 }).trim().toLowerCase();
+    const name = str(b.name, 'Name', { max: 120 }).trim(); if (!name) throw new BadRequestException('Enter their name.');
+    const org = await this.checkEmail(email);
+    const role = await this.prisma.role.findUnique({ where: { name: str(b.role, 'Role', { required: true }) } }); if (!role) throw new BadRequestException('Unknown role');
+    const min = Number((org.security as any).pwd) || 12; const password = String(b.password || '');
+    if (password.length < min) throw new BadRequestException(`The password must be at least ${min} characters (Settings → Security).`);
+    await this.prisma.user.create({ data: { email, name, title: str(b.title, 'Job title', { max: 120 }).trim(), roleId: role.id, status: 'Active', passwordHash: await bcrypt.hash(password, 10) } });
+    await this.audit.log(me, `Added ${name} (${email}) as ${role.name}`, 'icon-user-plus', 'access');
+    let note = '';
+    if (b.welcome) {
+      const text = `Hi ${name.split(' ')[0]},\n\n${me.name} has set up your ${org.name} account on Business OS as ${role.name}.\n\nSign in at ${this.webOrigin()}/login with ${email}. ${me.name.split(' ')[0]} will give you your first password.`;
+      const r = await this.mail.send({ to: email, subject: `Your ${org.name} account is ready`, text, html: htmlOf(text), replyTo: me.email, kind: 'welcome', ref: email, userId: me.id });
+      note = r.ok ? ' Welcome email sent.' : ` The welcome email wasn’t sent: ${r.error}`;
+    }
+    return { message: `${name} added. They can sign in now.${note}` };
   }
 
   // roles & permissions
@@ -226,7 +305,19 @@ export class SettingsController {
   }
 
   @Post('reminders/test') @HttpCode(200) @Perm('settings.manage')
-  test(@Me() me: AuthUser) { return { message: `Test reminder sent to ${me.email}.` }; }
+  async test(@Me() me: AuthUser) {
+    const org = await this.org(); const rem = org.reminders as any;
+    const vars = { contact: me.name.split(' ')[0], customer: 'Sample Customer Pvt Ltd', number: 'INV-SAMPLE-0001', amount: '₹1,18,000', due: 'next Friday' };
+    const text = fill(rem.body, vars);
+    const r = await this.mail.send({ to: me.email, subject: '[Test] ' + fill(rem.subject, vars), text, html: htmlOf(text), kind: 'test', userId: me.id });
+    return { message: r.ok ? `Test reminder sent to ${me.email}.` : `Test not sent: ${r.error}` };
+  }
+
+  @Get('email') @Perm('settings.manage')
+  async emailLog() {
+    const rows = await this.prisma.emailLog.findMany({ orderBy: { createdAt: 'desc' }, take: 200 });
+    return { configured: this.mail.configured, from: process.env.EMAIL_FROM || '', rows: rows.map(r => ({ id: r.id, to: r.to, subject: r.subject, kind: r.kind, ref: r.ref, status: r.status, error: r.error, when: relTime(r.createdAt) })) };
+  }
 
   @Patch('templates/:kind') @Perm('template.manage')
   async template(@Me() me: AuthUser, @Param('kind') kind: string, @Body() b: any) {

@@ -70,6 +70,8 @@ model User {
   role         Role      @relation(fields: [roleId], references: [id])
   status       String    @default("Active") // Active | Invited | Deactivated
   passwordHash String?
+  inviteToken  String?   @unique
+  inviteExpiry DateTime?
   lastActiveAt DateTime?
   createdAt    DateTime  @default(now())
 
@@ -217,6 +219,8 @@ model Meeting {
   agenda      String            @default("")
   notes       String            @default("")
   organizerId String
+  guests      String[]          @default([])
+  sequence    Int               @default(0)
   attendees   MeetingAttendee[]
   actions     ActionItem[]
 }
@@ -377,4 +381,17 @@ model LegacyMonth {
   month     String @id // YYYY-MM
   invoiced  Int
   collected Int
+}
+
+/// Every email the system sends, with its delivery result.
+model EmailLog {
+  id        String   @id @default(cuid())
+  to        String
+  subject   String
+  kind      String   // quote | invoice | reminder | invite | welcome | meeting | test
+  ref       String?
+  status    String   // sent | failed
+  error     String?
+  userId    String?
+  createdAt DateTime @default(now())
 }

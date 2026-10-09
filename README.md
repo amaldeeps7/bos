@@ -23,6 +23,8 @@ docker compose up --build
 
 Open http://localhost:3000. The sign-in screen lists demo accounts (password `demo1234`). Priya Raman (Project manager) is the persona the design was built around.
 
+Every email the app sends lands in Mailpit at http://localhost:8025. To deliver real email, set `SMTP_URL` (and `EMAIL_FROM`) in `.env`, e.g. `smtps://user:password@smtp.example.com:465`.
+
 ### Local development
 
 Needs Node 22, pnpm 10, Postgres and Redis.
@@ -44,7 +46,7 @@ pnpm --filter @bos/shared build && pnpm --filter @bos/shared test   # GST, numbe
 pnpm --filter @bos/api test     # API end-to-end against Postgres (re-seeds the database)
 ```
 
-The API suite covers sign-in, permission enforcement on the API, module switches, GST by place of supply, the milestone → invoice → approval → issue → payment flow, discount-policy routing, GSTIN validation and forward-only numbering.
+The API suite covers sign-in, permission enforcement on the API, module switches, GST by place of supply, the milestone → invoice → approval → issue → payment flow, discount-policy routing, GSTIN validation, forward-only numbering, PDF rendering, the email log, adding and inviting people, meeting guests, permission-aware search, and editing projects, milestones and deals.
 
 ## How it works
 
@@ -54,6 +56,10 @@ The API suite covers sign-in, permission enforcement on the API, module switches
 - **GST** is CGST + SGST when the customer's GSTIN state matches the default issuing entity's, IGST otherwise, at the rate set per SAC code.
 - **Audit log** is append-only; settings, access changes and document steps are written to it.
 - **Demo mode** (`DEMO_MODE=true`) adds the design's dashed buttons — "Approve as Meera (demo)", "Issue as Meera (demo)" — so one person can walk a document through steps that belong to other roles. The audit log records who clicked. Turn it off in production; then each step needs a person who holds the permission.
+- **Email.** Sending a quotation or invoice emails it to the customer's billing email with the PDF attached; credit notes, payment reminders (Settings → Reminders wording), user invitations and meeting invites (with a calendar invite that Google, Outlook and Apple Calendar understand, including updates and cancellations) all go out over SMTP. Every message is recorded with its result under Settings → Email. Without `SMTP_URL`, nothing is sent and the log says so.
+- **PDFs** for quotations, invoices and credit notes are drawn on the server from Settings → Templates: layout, accent colour, logo, SAC column, bank details, a UPI QR code for the balance due, signatory line, amount in words and terms.
+- **Search (⌘K / Ctrl K, or `/`)** looks across customers, projects, tasks, meetings, quotations, invoices, payments, credit notes, deals, assets and people — by name, document number, `TSK-123`, GSTIN or bank reference — and only returns what the searcher's role can see. With an empty box it offers quick actions and every page.
+- **People.** Admins can add someone directly with a password they set (optionally sending a welcome email), or invite by email: the invitee gets a 7-day link to choose their own password. Names, job titles, roles and passwords can be changed later.
 - **Assistant.** Suggested questions are answered from live records by the API. Free-text questions go to Claude (`claude-opus-5-5`, server-side refusal fallback enabled) when `ANTHROPIC_API_KEY` is set; otherwise the assistant says so.
 
 ## Where things are
@@ -65,7 +71,10 @@ The API suite covers sign-in, permission enforcement on the API, module switches
 | Task ticket panel, meeting record | `apps/web/src/components/overlays.tsx` |
 | Dialogs (meeting, task, customer, payment, credit note) | `apps/web/src/components/dialogs.tsx` |
 | Quotation / invoice view and editor | `apps/web/src/components/docs.tsx` |
-| Settings (all 13 sections, permission matrix) | `apps/web/src/components/settings.tsx` |
+| Settings (all sections, permission matrix, email log) | `apps/web/src/components/settings.tsx` |
+| Edit dialogs (project, milestone, deal, asset, payment, person) | `apps/web/src/components/forms.tsx` |
+| ⌘K search | `apps/web/src/components/search.tsx`, `apps/api/src/modules/search.controller.ts` |
+| Email, PDFs, calendar invites | `apps/api/src/core/mail.service.ts`, `apps/api/src/core/pdf.service.ts`, `apps/api/src/core/ics.ts`, `apps/api/src/modules/documents.service.ts` |
 | Assistant | `apps/web/src/components/assistant.tsx`, `apps/api/src/modules/ai.controller.ts` |
 | Data model and demo data | `apps/api/prisma/schema.prisma`, `apps/api/prisma/seed.ts` |
 
@@ -74,5 +83,7 @@ The API suite covers sign-in, permission enforcement on the API, module switches
 - The app is personalised for whoever signs in, not hard-wired to Priya, and uses the real clock in the organisation's time zone (the prototype froze it at 10:20 am on 8 Oct). Demo data is generated relative to today.
 - After the working day ends, "New meeting" proposes tomorrow's first free slot, and "Plan" says there's no free hour left instead of booking one in the past.
 - Due dates can be changed from the task panel (the prototype showed them read-only).
-- Not wired to outside services yet: calendar invites, emails (quotes, invoices, reminders), PDF generation and UPI QR codes are recorded and announced but not sent or rendered. The ⌘K search box is visual only.
+- The Project manager role can add people (`user.manage`) in freshly seeded databases. In a database seeded before this change, grant it in Settings → Roles & permissions.
+- Reminders are sent when someone clicks "Send reminder" or "Remind overdue customers"; the schedule in Settings → Reminders isn't run automatically yet.
+- Meeting invites are sent as calendar emails rather than through a two-way Google/Outlook calendar sync.
 - One organisation per deployment.

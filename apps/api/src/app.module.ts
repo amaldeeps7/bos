@@ -11,12 +11,14 @@ import { MeetingsController } from './modules/meetings.controller';
 import { ApprovalsController } from './modules/approvals.controller';
 import { ApprovalsService } from './modules/approvals.service';
 import { FinanceService } from './modules/finance.service';
+import { DocumentsService } from './modules/documents.service';
 import { CatalogController, CustomersController, OpportunitiesController, QuotesController } from './modules/sales.controller';
 import { CreditNotesController, InvoicesController, PaymentsController } from './modules/finance.controller';
 import { AssetsController, ProjectsController } from './modules/delivery.controller';
 import { ReportsController } from './modules/reports.controller';
 import { SettingsController } from './modules/settings.controller';
 import { AiController } from './modules/ai.controller';
+import { SearchController } from './modules/search.controller';
 
 @Controller('health')
 class HealthController {
@@ -29,7 +31,7 @@ class HealthController {
   imports: [CoreModule],
   controllers: [HealthController, AuthController, PeopleController, TasksController, MeetingsController, ApprovalsController,
     CustomersController, OpportunitiesController, CatalogController, QuotesController, InvoicesController, PaymentsController, CreditNotesController,
-    ProjectsController, AssetsController, ReportsController, SettingsController, AiController],
-  providers: [{ provide: APP_GUARD, useClass: AuthGuard }, FinanceService, ApprovalsService],
+    ProjectsController, AssetsController, ReportsController, SettingsController, AiController, SearchController],
+  providers: [{ provide: APP_GUARD, useClass: AuthGuard }, FinanceService, ApprovalsService, DocumentsService],
 })
 export class AppModule {}

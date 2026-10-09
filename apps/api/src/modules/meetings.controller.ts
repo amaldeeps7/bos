@@ -8,21 +8,48 @@ import { OrgService } from '../core/org.service';
 import { Me } from '../core/decorators';
 import type { AuthUser } from '../core/auth.types';
 import { d, num, str, toDate } from '../core/util';
+import { MailService, htmlOf } from '../core/mail.service';
+import { meetingIcs } from '../core/ics';
 
 const include = { attendees: true, actions: { orderBy: { sort: 'asc' } } } satisfies Prisma.MeetingInclude;
 type MeetingRow = Prisma.MeetingGetPayload<{ include: typeof include }>;
 const map = (m: MeetingRow) => ({
   id: m.id, title: m.title, date: d(m.date), start: m.start, dur: m.dur, projectId: m.projectId, loc: m.loc, link: m.link, ext: m.ext,
-  agenda: m.agenda, notes: m.notes, organizerId: m.organizerId, attendees: m.attendees.map(a => a.userId),
+  agenda: m.agenda, notes: m.notes, organizerId: m.organizerId, attendees: m.attendees.map(a => a.userId), guests: m.guests,
   actions: m.actions.map(a => ({ id: a.id, text: a.text, assigneeId: a.assigneeId, taskId: a.taskId })),
 });
 const LINK = /^https?:\/\/\S+$/i;
+const EMAIL = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+const cleanGuests = (v: unknown): string[] => {
+  if (!Array.isArray(v)) return [];
+  const g = [...new Set(v.map(x => String(x).trim().toLowerCase()).filter(Boolean))];
+  const bad = g.find(x => !EMAIL.test(x)); if (bad) throw new BadRequestException(`${bad} isn’t a valid email address`);
+  if (g.length > 50) throw new BadRequestException('Up to 50 guests');
+  return g;
+};
 const provider = (u: string) => (/meet\.google\./i.test(u) ? 'Google Meet' : /zoom\.us/i.test(u) ? 'Zoom' : /teams\.(microsoft|live)\./i.test(u) ? 'Microsoft Teams' : '');
 
 /** Calendar entries linked to work. Everybody signed in can keep meetings; they see the ones they attend. */
 @Controller('meetings')
 export class MeetingsController {
-  constructor(private prisma: PrismaService, private notify: NotifyService, private orgs: OrgService) {}
+  constructor(private prisma: PrismaService, private notify: NotifyService, private orgs: OrgService, private mail: MailService) {}
+
+  /** Emails a calendar invite (or cancellation) to attendees and outside guests, organiser excluded. */
+  private async invite(m: MeetingRow, me: AuthUser, method: 'REQUEST' | 'CANCEL', only?: { userIds: string[]; guests: string[] }) {
+    const { org, today } = await this.orgs.ctx();
+    const users = await this.prisma.user.findMany({ where: { id: { in: m.attendees.map(a => a.userId) } } });
+    const organizer = (await this.prisma.user.findUnique({ where: { id: m.organizerId } })) || { name: me.name, email: me.email };
+    const everyone = [...users.map(u => ({ name: u.name, email: u.email })), ...m.guests.map(email => ({ email }))];
+    const to = only ? [...users.filter(u => only.userIds.includes(u.id)).map(u => u.email), ...only.guests] : everyone.map(a => a.email).filter(e => e !== organizer.email);
+    if (!to.length) return { ok: true, count: 0 };
+    const ics = meetingIcs({ ...m, date: d(m.date) }, org.tz, organizer, everyone, method);
+    const when = `${dayLabel(d(m.date), today)}, ${fmtT(m.start)} – ${fmtT(m.start + m.dur)} (${org.tz})`;
+    const text = method === 'CANCEL' ? `${organizer.name} cancelled “${m.title}” (${when}).`
+      : `${organizer.name} invited you to “${m.title}”.\n\nWhen: ${when}\nWhere: ${m.loc}${m.link ? `\nJoin: ${m.link}` : ''}${m.agenda ? `\n\nAgenda:\n${m.agenda}` : ''}`;
+    const r = await this.mail.send({ to, subject: `${method === 'CANCEL' ? 'Cancelled' : m.sequence ? 'Updated' : 'Invitation'}: ${m.title} — ${when}`, text, html: htmlOf(text), replyTo: organizer.email,
+      icalEvent: { method, content: ics }, kind: 'meeting', ref: m.id, userId: me.id });
+    return { ...r, count: to.length };
+  }
 
   private async get(me: AuthUser, id: string) {
     const m = await this.prisma.meeting.findFirst({ where: { id, OR: [{ organizerId: me.id }, { attendees: { some: { userId: me.id } } }] }, include });
@@ -59,33 +86,47 @@ export class MeetingsController {
     if (data.projectId && !pr) throw new BadRequestException('Unknown project');
     data.title = data.title || (pr ? `${pr.customer.name} — catch-up` : 'Meeting');
     const who: string[] = [...new Set([me.id, ...(Array.isArray(b.attendees) ? b.attendees.map(String) : [])])];
-    const m = await this.prisma.meeting.create({ data: { ...(data as any), organizerId: me.id, attendees: { create: who.map(userId => ({ userId })) } }, include });
+    const m = await this.prisma.meeting.create({ data: { ...(data as any), guests: cleanGuests(b.guests), organizerId: me.id, attendees: { create: who.map(userId => ({ userId })) } }, include });
+    const sent = await this.invite(m, me, 'REQUEST');
     const { today } = await this.orgs.ctx();
     await this.notify.send(who, 'icon-calendar', `${me.name.split(' ')[0]} invited you to ${m.title} · ${dayLabel(d(m.date), today)}, ${fmtT(m.start)}`, '/meetings', me.id);
-    return map(m);
+    return { ...map(m), invited: sent.count, emailed: sent.ok, emailError: sent.ok ? undefined : (sent as any).error };
   }
 
   @Patch(':id')
   async update(@Me() me: AuthUser, @Param('id') id: string, @Body() b: any) {
     const old = await this.get(me, id);
     const data = this.fields(b, true);
+    if (b.guests !== undefined) data.guests = cleanGuests(b.guests);
     if (Array.isArray(b.attendees)) {
       const who = [...new Set([old.organizerId, ...b.attendees.map(String)])];
       await this.prisma.meetingAttendee.deleteMany({ where: { meetingId: id } });
       await this.prisma.meetingAttendee.createMany({ data: who.map(userId => ({ meetingId: id, userId })) });
     }
-    const m = await this.prisma.meeting.update({ where: { id }, data, include });
+    let m = await this.prisma.meeting.update({ where: { id }, data, include });
     const moved = d(old.date) !== d(m.date) || old.start !== m.start;
+    // Calendar-relevant changes go out as an updated invite; agenda and notes edits don't.
+    const ids = (x: MeetingRow) => x.attendees.map(a => a.userId).sort().join();
+    const relevant = moved || old.dur !== m.dur || old.title !== m.title || old.loc !== m.loc || old.link !== m.link || ids(old) !== ids(m) || old.guests.join() !== m.guests.join();
+    let emailed: boolean | undefined;
+    if (relevant) {
+      m = await this.prisma.meeting.update({ where: { id }, data: { sequence: { increment: 1 } }, include });
+      const removedUsers = old.attendees.map(a => a.userId).filter(u => !m.attendees.some(a => a.userId === u));
+      const removedGuests = old.guests.filter(g => !m.guests.includes(g));
+      if (removedUsers.length || removedGuests.length) await this.invite(m, me, 'CANCEL', { userIds: removedUsers, guests: removedGuests });
+      emailed = (await this.invite(m, me, 'REQUEST')).ok;
+    }
     if (moved) {
       const { today } = await this.orgs.ctx();
       await this.notify.send(m.attendees.map(a => a.userId), 'icon-calendar-clock', `${m.title} moved to ${dayLabel(d(m.date), today)}, ${fmtT(m.start)}`, '/meetings', me.id);
     }
-    return { ...map(m), moved };
+    return { ...map(m), moved, emailed };
   }
 
   @Delete(':id')
   async cancel(@Me() me: AuthUser, @Param('id') id: string) {
     const m = await this.get(me, id);
+    await this.invite({ ...m, sequence: m.sequence + 1 }, me, 'CANCEL');
     await this.prisma.meeting.delete({ where: { id } });
     await this.notify.send(m.attendees.map(a => a.userId), 'icon-calendar-x', `${m.title} was cancelled`, '/meetings', me.id);
     return { ok: true };

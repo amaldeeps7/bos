@@ -10,6 +10,7 @@ import { Assistant } from './assistant';
 import { TaskPanel, MeetingPanel } from './overlays';
 import { MeetingDialog, NewTaskDialog, CustomerDialog, PaymentDialog, CreditDialog } from './dialogs';
 import { useTitle } from './title';
+import { CommandPalette } from './search';
 
 const navBtn = (active: boolean) => ({ display: 'flex', alignItems: 'center', gap: 12, minHeight: 42, padding: '8px 12px', border: 0, borderRadius: 8, cursor: 'pointer', fontSize: 15, width: '100%', background: active ? '#eef4ff' : 'transparent', color: active ? '#0052ff' : '#64748b', fontWeight: active ? 600 : 500 } as const);
 const Count = ({ n, small }: { n: number; small?: boolean }) => small
@@ -99,10 +100,11 @@ export function AppShell({ children }: { children: ReactNode }) {
               <p className="ellipsis" style={{ margin: 0, fontSize: 17, fontWeight: 600, letterSpacing: '-0.011em', minWidth: 0 }}>{title.title}</p>
             </> : <p className="ellipsis" style={{ margin: 0, minWidth: 0, fontSize: 15, fontWeight: 500, color: '#64748b' }}>{SCREENS[screen]?.group}</p>}
             <div style={{ flex: 1 }} />
+            {(isMobile || app.width < 1000) && <button onClick={() => setUi({ search: true })} aria-label="Search" className="ghost-icon" style={{ width: 40, height: 40 }}><Icon name="search" size={19} /></button>}
             {!isMobile && app.width >= 1000 && (
-              <button className="hov-soft" style={{ height: 36, flex: 'none', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 8, padding: '0 8px 0 12px', border: '1px solid #cbd5e1', borderRadius: 8, background: '#fff', color: '#64748b', fontSize: 14, cursor: 'pointer', boxShadow: '0 1px 2px rgba(15,23,42,.04)' }}>
+              <button onClick={() => setUi({ search: true })} aria-label="Search" className="hov-soft" style={{ height: 36, flex: 'none', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 8, padding: '0 8px 0 12px', border: '1px solid #cbd5e1', borderRadius: 8, background: '#fff', color: '#64748b', fontSize: 14, cursor: 'pointer', boxShadow: '0 1px 2px rgba(15,23,42,.04)' }}>
                 <Icon name="search" size={14} /><span style={{ paddingRight: 28 }}>Search…</span>
-                <kbd style={{ fontFamily: 'inherit', fontSize: 12, border: '1px solid #e2e8f0', borderRadius: 4, padding: '2px 4px', lineHeight: 1 }}>⌘ K</kbd>
+                <kbd style={{ fontFamily: 'inherit', fontSize: 12, border: '1px solid #e2e8f0', borderRadius: 4, padding: '2px 4px', lineHeight: 1 }}>{typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘ K' : 'Ctrl K'}</kbd>
               </button>
             )}
             <button onClick={() => setUi({ notifOpen: !ui.notifOpen })} aria-label="Notifications" className="ghost-icon" style={{ position: 'relative', width: 40, height: 40 }}>
@@ -173,6 +175,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         <CustomerDialog />
         <PaymentDialog />
         <CreditDialog />
+        <CommandPalette />
         {app.toastMsg && (
           <div role="status" style={{ position: 'absolute', left: '50%', bottom: 84, transform: 'translateX(-50%)', zIndex: 80, display: 'flex', alignItems: 'center', gap: 10, padding: '10px 16px', background: '#0f172a', color: '#fff', borderRadius: 10, fontSize: 14, boxShadow: '0 16px 48px -12px rgba(15,23,42,.4)', maxWidth: 'calc(100% - 32px)' }}>
             <Icon name="circle-check" size={16} style={{ color: '#6ee7b7' }} /><span>{app.toastMsg}</span>

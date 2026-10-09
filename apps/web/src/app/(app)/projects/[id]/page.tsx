@@ -1,4 +1,5 @@
 'use client';
+import { useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { MILESTONE_STATUS, dayLabel, dayNum, fmtD, fmtMon, fmtT, inr } from '@bos/shared';
 import { useAct, useApp, useQ } from '@/lib/app';
@@ -8,6 +9,8 @@ import { Avatar, Back, Badge, Btn, Card, CardHead, Icon, Metric, Metrics, PageHe
 import { ProjectTaskRow } from '@/components/task-row';
 import { useOpenNewMeeting } from '@/components/dialogs';
 import { askAssistant } from '@/components/assistant';
+import { MilestoneDialog, ProjectDialog } from '@/components/forms';
+import type { Milestone } from '@/lib/types';
 
 export default function ProjectDetail() {
   const { id } = useParams<{ id: string }>(); const router = useRouter(); const act = useAct();
@@ -17,6 +20,7 @@ export default function ProjectDetail() {
   const meetings = useQ<Meeting[]>('meetings').data || [];
   const quotes = useQ<Quote[]>(can('sales') ? 'quotes' : null).data || [];
   const newMeeting = useOpenNewMeeting();
+  const [editing, setEditing] = useState(false); const [ms, setMs] = useState<Milestone | 'new' | null>(null);
   if (!p) return <p style={{ color: '#64748b' }}>Loading…</p>;
   const st = projStats(p);
   const pTasks = tasks.filter(t => t.projectId === p.id && t.status !== 'done').sort((a, b) => a.due.localeCompare(b.due));
@@ -36,7 +40,9 @@ export default function ProjectDetail() {
     <Back label="Projects" onClick={() => router.push('/projects')} />
     <PageHead title={p.name} badge={<Badge tone={p.status === 'ON_HOLD' ? 'warning' : 'success'} dot>{p.status === 'ON_HOLD' ? 'On hold' : 'Active'}</Badge>}
       sub={<>For {p.customer}, reference <span className="mono" style={{ fontSize: 14 }}>{p.code}</span> · {p.bu}</>}
-      right={can('ai') && <Btn icon="sparkles" onClick={summarise}>Summarise</Btn>} />
+      right={<div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>{has('project.update') && <Btn icon="pencil" onClick={() => setEditing(true)}>Edit</Btn>}{can('ai') && <Btn icon="sparkles" onClick={summarise}>Summarise</Btn>}</div>} />
+    {editing && <ProjectDialog project={p} onClose={() => setEditing(false)} />}
+    {ms && <MilestoneDialog project={p} milestone={ms === 'new' ? undefined : ms} onClose={() => setMs(null)} />}
     <Metrics>
       <Metric label="Contract value" value={inr(p.contract)} /><Metric label="Invoiced" value={inr(st.inv)} /><Metric label="Collected" value={inr(st.paid)} /><Metric label="Left to bill" value={inr(p.contract - st.inv)} />
     </Metrics>
@@ -47,7 +53,7 @@ export default function ProjectDetail() {
       </div>
     )}
     <Card>
-      <CardHead title="Milestones" sub="Complete a milestone to make it billable, then raise its invoice." />
+      <CardHead title="Milestones" sub="Complete a milestone to make it billable, then raise its invoice." right={has('project.update') && <Btn size="sm" icon="plus" onClick={() => setMs('new')} style={{ boxShadow: 'none' }}>Add milestone</Btn>} />
       {p.milestones.map((m, i) => { const [label, tone, solid] = MILESTONE_STATUS[m.status];
         return (
           <div key={m.id} style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px 20px', padding: '14px 20px', borderBottom: '1px solid #f1f5f9' }}>
@@ -55,7 +61,8 @@ export default function ProjectDetail() {
             <div style={{ flex: '1 1 200px', minWidth: 0 }}><p style={{ margin: 0, fontSize: 15, fontWeight: 500 }}>{m.name}</p><p style={{ margin: '2px 0 0', fontSize: 13, color: '#64748b' }}>{m.pct}% of contract · due {fmtD(m.due)}</p></div>
             <Badge tone={tone} solid={solid} dot={!solid}>{label}</Badge>
             <span className="num" style={{ width: 110, textAlign: 'right', fontSize: 15, fontWeight: 500 }}>{inr(m.value)}</span>
-            <div style={{ width: 150, display: 'flex', justifyContent: 'flex-end' }}>
+            <div style={{ width: 190, display: 'flex', justifyContent: 'flex-end', gap: 6 }}>
+              {has('project.update') && <button onClick={() => setMs(m)} title="Edit milestone" aria-label={`Edit ${m.name}`} className="outline-blue" style={{ width: 34, height: 34, flex: 'none', border: '1px solid #e2e8f0', borderRadius: 8, background: '#fff', color: '#64748b', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="pencil" size={14} /></button>}
               {(m.status === 'IN_PROGRESS' || m.status === 'PENDING') && has('project.update') && <Btn size="sm" icon="circle-check" onClick={() => act(`projects/${p.id}/milestones/${m.id}/complete`)} style={{ boxShadow: 'none' }}>Complete</Btn>}
               {m.status === 'COMPLETED' && has('invoice.create') && <Btn size="sm" kind="pri" icon="file-text" onClick={async () => { const r = await act(`projects/${p.id}/milestones/${m.id}/bill`); if (r?.invoiceId) router.push(`/invoices/${r.invoiceId}`); }}>Raise invoice</Btn>}
             </div>

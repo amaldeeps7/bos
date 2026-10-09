@@ -1,4 +1,6 @@
-import { BadRequestException, Body, Controller, Delete, ForbiddenException, Get, HttpCode, NotFoundException, Param, Patch, Post } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Delete, ForbiddenException, Get, HttpCode, NotFoundException, Param, Patch, Post, Res } from '@nestjs/common';
+import type { Response } from 'express';
+import { DocumentsService, mailNote } from './documents.service';
 import { isValidGstin, STAGES, stateOf, UNISSUED } from '@bos/shared';
 import { PrismaService } from '../core/prisma.service';
 import { AccessService } from '../core/access.service';
@@ -54,12 +56,15 @@ export class CustomersController {
     for (const f of ['name', 'city', 'contact', 'email', 'phone'] as const) if (b[f] !== undefined) data[f] = str(b[f], f, { max: 200 }).trim();
     if (b.gstin !== undefined) { const g = String(b.gstin).toUpperCase(); if (!isValidGstin(g)) throw new BadRequestException('Enter a valid 15-character GSTIN.'); data.gstin = g; }
     if (b.terms !== undefined) data.terms = num(b.terms, 'Payment terms', { min: 0, max: 180 });
-    await this.prisma.customer.update({ where: { id }, data });
-    return { ok: true };
+    if (b.email && !EMAIL.test(String(b.email))) throw new BadRequestException('Enter a valid billing email.');
+    if (data.gstin) { const dup = await this.prisma.customer.findFirst({ where: { gstin: data.gstin, id: { not: id } } }); if (dup) throw new BadRequestException(`${dup.name} already has this GSTIN.`); }
+    if (b.ownerId !== undefined) data.ownerId = String(b.ownerId);
+    const c = await this.prisma.customer.update({ where: { id }, data });
+    return { message: `${c.name} saved. New documents use these details.` };
   }
 
   @Delete(':id') @Perm('customer.archive')
-  async archive(@Param('id') id: string) { await this.prisma.customer.update({ where: { id }, data: { archived: true } }); return { ok: true }; }
+  async archive(@Param('id') id: string) { const c = await this.prisma.customer.update({ where: { id }, data: { archived: true } }); return { message: `${c.name} archived. Their documents stay.` }; }
 }
 
 @Controller('opportunities')
@@ -70,6 +75,36 @@ export class OpportunitiesController {
   async list() {
     const rows = await this.prisma.opportunity.findMany({ include: { customer: true }, orderBy: { value: 'desc' } });
     return rows.map(o => ({ id: o.id, name: o.name, customerId: o.customerId, customer: o.customer.name, value: o.value, ownerId: o.ownerId, stage: o.stage, next: o.next }));
+  }
+
+  private async fields(b: any, partial: boolean) {
+    const data: any = {};
+    if (!partial || b.name !== undefined) { data.name = str(b.name, 'Name', { max: 200 }).trim(); if (!data.name) throw new BadRequestException('Name the deal.'); }
+    if (!partial || b.customerId !== undefined) { const c = await this.prisma.customer.findUnique({ where: { id: str(b.customerId, 'Customer', { required: true }) } }); if (!c) throw new BadRequestException('Pick a customer'); data.customerId = c.id; }
+    if (!partial || b.value !== undefined) data.value = Math.round(num(b.value ?? 0, 'Value', { min: 0 }));
+    if (b.stage !== undefined) data.stage = Math.round(num(b.stage, 'Stage', { min: 0, max: 4 }));
+    if (b.next !== undefined) data.next = str(b.next, 'Next step', { max: 300 }).trim();
+    if (b.ownerId !== undefined) data.ownerId = String(b.ownerId);
+    return data;
+  }
+
+  @Post() @Perm('customer.update')
+  async create(@Me() me: AuthUser, @Body() b: any) {
+    const data = await this.fields(b, false);
+    const o = await this.prisma.opportunity.create({ data: { ...data, stage: data.stage ?? 0, next: data.next ?? '', ownerId: data.ownerId || me.id } });
+    return { id: o.id, message: `${o.name} added to the pipeline.` };
+  }
+
+  @Patch(':id') @Perm('customer.update')
+  async update(@Param('id') id: string, @Body() b: any) {
+    const o = await this.prisma.opportunity.update({ where: { id }, data: await this.fields(b, true) });
+    return { message: `${o.name} saved.` };
+  }
+
+  @Delete(':id') @Perm('customer.update')
+  async remove(@Param('id') id: string) {
+    const o = await this.prisma.opportunity.delete({ where: { id } });
+    return { message: `${o.name} removed from the pipeline.` };
   }
 
   @Post(':id/advance') @HttpCode(200) @Perm('customer.update')
@@ -114,7 +149,13 @@ export class CatalogController {
 
 @Controller('quotes')
 export class QuotesController {
-  constructor(private prisma: PrismaService, private fin: FinanceService, private audit: AuditService, private access: AccessService, private numbering: NumberingService) {}
+  constructor(private prisma: PrismaService, private fin: FinanceService, private audit: AuditService, private access: AccessService, private numbering: NumberingService, private docs: DocumentsService) {}
+
+  @Get(':id/pdf') @Perm('quote.read')
+  async pdf(@Param('id') id: string, @Res() res: Response) {
+    const { buffer, filename } = await this.docs.quotePdf(id);
+    res.set({ 'Content-Type': 'application/pdf', 'Content-Disposition': `inline; filename="${filename}"` }).send(buffer);
+  }
 
   private async one(id: string) { const q = await this.prisma.quote.findUnique({ where: { id }, include: { customer: true } }); if (!q) throw new NotFoundException('Quotation not found'); return q; }
 
@@ -158,9 +199,12 @@ export class QuotesController {
       case 'submit': AccessService.require(me, 'quote.create'); return { message: await this.fin.submitQuote(id, me) };
       case 'send': {
         need(['APPROVED']); const who = await this.access.actor(me, 'quote.send');
+        if (!q.customer.email) throw new BadRequestException(`${q.customer.name} has no billing email. Add one on the customer first.`);
+        const r = await this.docs.emailQuote(id, me.id);
+        if (!r.ok && !r.error?.includes('not configured')) throw new BadRequestException(`Couldn’t email ${q.no}: ${r.error}`);
         await this.prisma.quote.update({ where: { id }, data: { status: 'SENT' } });
         await this.audit.log(who, `${who.name} sent ${q.no} to ${q.customer.name}`, 'icon-mail', 'quote');
-        return { message: `${q.no} emailed to ${q.customer.email}.` };
+        return { message: r.ok ? `${q.no} emailed to ${q.customer.email} with the PDF attached.` : `${q.no} marked as sent.${mailNote(r)}` };
       }
       case 'accept': case 'decline': {
         need(['SENT']); AccessService.require(me, 'quote.update');
@@ -170,7 +214,6 @@ export class QuotesController {
       }
       case 'to-project': return this.toProject(me, q);
       case 'to-invoice': return this.toInvoice(me, q);
-      case 'pdf': return { message: `${q.no}.pdf downloaded.` };
       default: throw new ForbiddenException('Unknown action');
     }
   }

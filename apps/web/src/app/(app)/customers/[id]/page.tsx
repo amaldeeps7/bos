@@ -8,7 +8,7 @@ import { InvoiceRowCompact, QuoteRowCompact } from '@/components/docs';
 
 export default function CustomerDetail() {
   const { id } = useParams<{ id: string }>(); const router = useRouter();
-  const { person, can, has } = useApp();
+  const { person, can, has, setUi } = useApp();
   const c = useQ<Customer[]>('customers').data?.find(x => x.id === id);
   const projects = (useQ<Project[]>(can('projects') ? 'projects' : null).data || []).filter(p => p.customerId === id);
   const quotes = (useQ<Quote[]>(can('sales') ? 'quotes' : null).data || []).filter(q => q.customerId === id);
@@ -20,6 +20,7 @@ export default function CustomerDetail() {
     <Back label="Customers" onClick={() => router.push('/customers')} />
     <PageHead title={c.name} sub={`${c.city}, ${c.state} · account owner ${person(c.ownerId).name}`} right={
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+        {has('customer.update') && <Btn icon="pencil" onClick={() => setUi({ customer: c.id })}>Edit</Btn>}
         {can('sales') && has('quote.create') && <Btn icon="scroll-text" onClick={() => router.push(`/quotes/new?customer=${c.id}`)}>New quotation</Btn>}
         {can('billing') && has('invoice.create') && <Btn kind="pri" icon="file-plus" onClick={() => router.push(`/invoices/new?customer=${c.id}`)}>New invoice</Btn>}
       </div>} />

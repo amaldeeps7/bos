@@ -21,7 +21,7 @@ export function Badge({ tone = 'neutral', solid, dot, style, children }: { tone?
 export const Status = ({ def }: { def: StatusDef }) => <Badge tone={def[1]} solid={def[2]} dot={!def[2]}>{def[0]}</Badge>;
 
 export const Icon = ({ name, size = 16, style }: { name: string; size?: number; style?: CSSProperties }) =>
-  <i className={name.startsWith('icon-') ? name : 'icon-' + name} style={{ fontSize: size, lineHeight: 1, ...style }} />;
+  <i aria-hidden="true" className={name.startsWith("icon-") ? name : "icon-" + name} style={{ fontSize: size, lineHeight: 1, ...style }} />;
 
 export function Card({ children, style, className = '' }: { children: ReactNode; style?: CSSProperties; className?: string }) {
   return <div className={'card ' + className} style={style}>{children}</div>;
@@ -109,7 +109,7 @@ export function Back({ label, onClick }: { label: string; onClick: () => void })
 
 export function Dialog({ title, sub, width = 480, children, footer, onClose }: { title: string; sub?: ReactNode; width?: number; children: ReactNode; footer: ReactNode; onClose: () => void }) {
   return (
-    <div onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }} style={{ position: 'absolute', inset: 0, zIndex: 70, background: 'rgba(15,23,42,.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+    <div onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }} style={{ position: 'fixed', inset: 0, zIndex: 70, background: 'rgba(15,23,42,.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
       <div role="dialog" aria-label={title} style={{ width, maxWidth: '100%', maxHeight: '100%', overflowY: 'auto', background: '#fff', borderRadius: 12, boxShadow: '0 16px 48px -12px rgba(15,23,42,.3)' }}>
         <div style={{ padding: '18px 20px', borderBottom: '1px solid #e2e8f0' }}>
           <h2 style={{ margin: 0, fontSize: 18, fontWeight: 600, letterSpacing: '-0.011em' }}>{title}</h2>
