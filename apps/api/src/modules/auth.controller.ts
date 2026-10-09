@@ -5,6 +5,7 @@ import * as bcrypt from 'bcryptjs';
 import { PrismaService } from '../core/prisma.service';
 import { RedisService } from '../core/redis.service';
 import { AccessService } from '../core/access.service';
+import { OrgService } from '../core/org.service';
 import { COOKIE } from '../core/auth.guard';
 import { Me, Public } from '../core/decorators';
 import type { AuthUser } from '../core/auth.types';
@@ -14,7 +15,7 @@ const TIMEOUTS: Record<string, number> = { '30 minutes': 1800, '8 hours': 8 * 36
 
 @Controller('auth')
 export class AuthController {
-  constructor(private prisma: PrismaService, private jwt: JwtService, private redis: RedisService, private access: AccessService) {}
+  constructor(private prisma: PrismaService, private jwt: JwtService, private redis: RedisService, private access: AccessService, private orgs: OrgService) {}
 
   @Public() @Post('login') @HttpCode(200)
   async login(@Body() body: any, @Res({ passthrough: true }) res: Response) {
@@ -45,8 +46,9 @@ export class AuthController {
 
   @Get('me')
   async me(@Me() me: AuthUser) {
-    const org = await this.prisma.organization.findUniqueOrThrow({ where: { id: 'org' } });
+    const c = await this.orgs.ctx(); const org = c.org;
     await this.prisma.user.update({ where: { id: me.id }, data: { lastActiveAt: new Date() } });
-    return { user: me, org: { name: org.name, slug: org.slug, tz: org.tz, currency: org.currency }, demo: process.env.DEMO_MODE === 'true', serverTime: new Date().toISOString() };
+    return { user: me, org: { name: org.name, slug: org.slug, tz: org.tz, currency: org.currency, ourState: c.ourState || '', discLimit: c.discLimit, sacRates: c.sacRates, templates: org.templates, entity: c.entity },
+      demo: process.env.DEMO_MODE === 'true', serverTime: new Date().toISOString() };
   }
 }

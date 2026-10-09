@@ -12,6 +12,10 @@ const ago = (days: number, hour = 10) => new Date(new Date(addDays(T, -days) + '
 const ln = (d: string, qty: number, unit: string, rate: number, disc = 0, sac = '998314') => ({ d, qty, unit, rate, disc, sac });
 
 async function main() {
+  if (process.argv.includes('--if-empty') && (await prisma.organization.count())) {
+    console.log('Workspace already exists — skipping the demo seed.');
+    return;
+  }
   // wipe (order matters for FKs)
   for (const m of ['notification', 'auditLog', 'approval', 'opportunity', 'asset', 'creditNote', 'paymentAllocation', 'payment', 'invoice', 'quote',
     'actionItem', 'meetingAttendee', 'meeting', 'timeBlock', 'taskEvent', 'task', 'milestone', 'project', 'customer', 'businessUnit', 'user', 'role',

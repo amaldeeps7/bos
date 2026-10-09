@@ -1,0 +1,50 @@
+# Business OS: Postgres + Redis + API + web.
+#   cp .env.example .env   (optional: add ANTHROPIC_API_KEY)
+#   docker compose up --build
+# Then open http://localhost:3000 and sign in as priya@democonsulting.in / demo1234.
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: bos
+      POSTGRES_PASSWORD: bos
+      POSTGRES_DB: bos
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bos"]
+      interval: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      retries: 20
+
+  api:
+    build: { context: ., dockerfile: apps/api/Dockerfile }
+    environment:
+      DATABASE_URL: postgresql://bos:bos@db:5432/bos?schema=public
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
+      DEMO_MODE: ${DEMO_MODE:-true}
+      SEED_DEMO: ${SEED_DEMO:-true}
+      WEB_ORIGIN: http://localhost:3000
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      PORT: 4000
+    depends_on:
+      db: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    ports: ["4000:4000"]
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      args: { API_URL: http://api:4000 }
+    depends_on: [api]
+    ports: ["3000:3000"]
+
+volumes:
+  pgdata:

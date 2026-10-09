@@ -105,8 +105,9 @@ export class TasksController {
       ...(await this.prisma.meeting.findMany({ where: { date: toDate(today), attendees: { some: { userId: me.id } } } })),
       ...(await this.prisma.timeBlock.findMany({ where: { userId: me.id, date: toDate(today) } })),
     ];
-    const now = nowHours(org.tz); let start = 18;
+    const now = nowHours(org.tz); let start = -1;
     for (let h = Math.max(9, Math.ceil(now * 2) / 2); h + 1 <= 19; h += 0.5) if (!busy.some(x => h < x.start + x.dur && x.start < h + 1)) { start = h; break; }
+    if (start < 0) throw new BadRequestException('There’s no free hour left today between meetings. Plan it first thing tomorrow.');
     await this.prisma.timeBlock.deleteMany({ where: { taskId: id, userId: me.id } });
     await this.prisma.timeBlock.create({ data: { taskId: id, userId: me.id, date: toDate(today), start, dur: 1 } });
     return { ...(await this.out(me, id)), message: `Blocked ${fmtT(start)} – ${fmtT(start + 1)} for “${t.title}”.` };
