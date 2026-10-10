@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { stateOf, todayISO } from '@bos/shared';
+import { placeOf, todayISO } from '@bos/shared';
 import { PrismaService } from './prisma.service';
 import { orgId } from './tenant';
 
@@ -15,7 +15,7 @@ export class OrgService {
     ]);
     const policy = org.policy as Record<string, any>;
     return {
-      org, entity, today: todayISO(org.tz), ourState: entity ? stateOf(entity.gstin) : undefined,
+      org, entity, today: todayISO(org.tz), ourState: placeOf(entity), ourGst: entity?.gst ?? true,
       sacRates: Object.fromEntries(sac.map(s => [s.code, s.rate])) as Record<string, number>,
       policy, discLimit: Number(policy.discount) || 0,
     };
@@ -25,6 +25,6 @@ export class OrgService {
   async entity(id?: string | null) {
     const e = id ? await this.prisma.legalEntity.findUnique({ where: { id } }) : await this.prisma.legalEntity.findFirst({ orderBy: [{ isDefault: 'desc' }, { name: 'asc' }] });
     if (!e) throw new Error(id ? 'Unknown legal entity' : 'Add a legal entity first');
-    return { ...e, state: stateOf(e.gstin) };
+    return { ...e, stateCode: e.state, state: placeOf(e) };
   }
 }

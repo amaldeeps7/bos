@@ -74,8 +74,8 @@ async function main() {
   }
   for (const [k, [, mgr]] of Object.entries(org)) if (mgr) await prisma.membership.update({ where: { id: U[k] }, data: { managerId: U[mgr] } });
 
-  const le1 = await prisma.legalEntity.create({ data: { name: 'Demo Consulting Pvt Ltd', gstin: '29AABCD4417E1Z3', pan: 'AABCD4417E', cin: 'U72900KA2019PTC124518', address: '2nd floor, 100 Feet Road, Indiranagar, Bengaluru 560038', bank: 'HDFC Bank · A/c 50200012345678 · IFSC HDFC0000123', upi: 'democonsulting@hdfcbank', isDefault: true } });
-  const le2 = await prisma.legalEntity.create({ data: { name: 'Demo Consulting Services LLP', gstin: '27AAJFD2210K1ZP', pan: 'AAJFD2210K', cin: 'AAT-4471', address: 'Unit 504, Kamala Mills, Lower Parel, Mumbai 400013', bank: 'ICICI Bank · A/c 039905001122 · IFSC ICIC0000399', upi: 'dcsllp@icici', isDefault: false } });
+  const le1 = await prisma.legalEntity.create({ data: { name: 'Demo Consulting Pvt Ltd', gstin: '29AABCD4417E1Z3', state: '29', pan: 'AABCD4417E', cin: 'U72900KA2019PTC124518', address: '2nd floor, 100 Feet Road, Indiranagar, Bengaluru 560038', bank: 'HDFC Bank · A/c 50200012345678 · IFSC HDFC0000123', upi: 'democonsulting@hdfcbank', isDefault: true } });
+  const le2 = await prisma.legalEntity.create({ data: { name: 'Demo Consulting Services LLP', gstin: '27AAJFD2210K1ZP', state: '27', pan: 'AAJFD2210K', cin: 'AAT-4471', address: 'Unit 504, Kamala Mills, Lower Parel, Mumbai 400013', bank: 'ICICI Bank · A/c 039905001122 · IFSC ICIC0000399', upi: 'dcsllp@icici', isDefault: false } });
   const BU: Record<string, string> = {};
   for (const [name, code, head] of [['Software', 'SW', 'priya'], ['Cybersecurity', 'CY', 'sara']]) BU[name] = (await prisma.businessUnit.create({ data: { name, code, entityId: le1.id, headId: U[head] } })).id;
 
@@ -85,7 +85,7 @@ async function main() {
   // One series per document type and GSTIN; quotations and projects are organisation-wide.
   const yr = { pattern: '{prefix}-{yyyy}-{seq}', padding: 4, reset: 'every financial year' };
   await prisma.series.createMany({ data: [
-    { type: 'INVOICE', entityId: le1.id, label: 'Invoices', prefix: 'INV', next: 143, ...yr },
+    { type: 'INVOICE', entityId: le1.id, label: 'Invoices', prefix: 'INV', next: 142, ...yr },
     { type: 'INVOICE', entityId: le2.id, label: 'Invoices', prefix: 'MH-INV', next: 18, ...yr },
     { type: 'QUOTATION', label: 'Quotations', prefix: 'QT', next: 91, ...yr },
     { type: 'CREDIT_NOTE', entityId: le1.id, label: 'Credit notes', prefix: 'CN', next: 9, ...yr },
@@ -107,7 +107,7 @@ async function main() {
     ['Meridian Clinics', '24AALCM9014T1Z6', 'Ahmedabad', 'Dr Hiren Patel', 'admin@meridianclinics.in', '+91 79 2630 4455', '', 30, 'rohan', -3],
   ];
   for (const [name, gstin, city, contact, email, phone, , terms, owner, since] of custs)
-    C[name] = (await prisma.customer.create({ data: { name, gstin, city, contact, email, phone, terms, ownerId: U[owner], since: D(since) } })).id;
+    C[name] = (await prisma.customer.create({ data: { name, gstin, state: gstin.slice(0, 2), city, contact, email, phone, terms, ownerId: U[owner], since: D(since) } })).id;
   if (!stateOf('27AAACK4821M1Z5')) throw new Error('state codes');
 
   // projects & milestones
@@ -196,7 +196,7 @@ async function main() {
   // invoices
   const I: Record<string, string> = {};
   const invs: [string, string, string, string, string | null, string | null, number, number, string, string, ReturnType<typeof ln>[]][] = [
-    ['i5', 'INV-2026-0142', 'Brightline Health', 'Patient Intake App — Integrations', 'p3', 'b', 0, 45, 'PENDING_APPROVAL', 'meera', [ln('Patient Intake App — Integrations (40%)', 1, 'milestone', 960000)]],
+    ['i5', 'DRAFT-7K2QMB', 'Brightline Health', 'Patient Intake App — Integrations', 'p3', 'b', 0, 45, 'PENDING_APPROVAL', 'meera', [ln('Patient Intake App — Integrations (40%)', 1, 'milestone', 960000)]],
     ['i2', 'INV-2026-0131', 'Kestrel Bank', 'SOC 2 Readiness — Policy & control design', 'p1', 'b', -20, 10, 'SENT', 'meera', [ln('SOC 2 Readiness — Policy & control design (20%)', 1, 'milestone', 370000, 0, '998313')]],
     ['i6', 'INV-2026-0125', 'Asterion Labs', 'Data Platform Discovery — Interviews', 'p5', 'a', -25, -10, 'PAID', 'meera', [ln('Data Platform Discovery — Stakeholder interviews (30%)', 1, 'milestone', 285000, 0, '998313')]],
     ['i1', 'INV-2026-0118', 'Kestrel Bank', 'SOC 2 Readiness — Gap assessment', 'p1', 'a', -32, -2, 'PAID', 'meera', [ln('SOC 2 Readiness — Gap assessment (20%)', 1, 'milestone', 370000, 0, '998313')]],
@@ -227,7 +227,7 @@ async function main() {
 
   // approvals waiting on Priya
   await prisma.approval.createMany({ data: [
-    { kind: 'Invoice', docType: 'invoice', docId: I.i5, ref: 'INV-2026-0142', title: 'Integrations milestone — Brightline Health', detail: 'Draft invoice for Patient Intake App, milestone 2 of 3. GST 18% applied by the legal entity.', amount: 960000, requestedById: U.meera, approverId: U.priya, createdAt: new Date(Date.now() - 2 * 3600e3) },
+    { kind: 'Invoice', docType: 'invoice', docId: I.i5, ref: 'DRAFT-7K2QMB', title: 'Integrations milestone — Brightline Health', detail: 'Draft invoice for Patient Intake App, milestone 2 of 3. GST 18% applied by the legal entity.', amount: 960000, requestedById: U.meera, approverId: U.priya, createdAt: new Date(Date.now() - 2 * 3600e3) },
     { kind: 'Milestone date', ref: 'PRJ-0024', title: `Move “Driver app beta” from ${new Date(D(16)).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', timeZone: 'UTC' })} to ${new Date(D(37)).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', timeZone: 'UTC' })}`, detail: 'Offline sync needs another sprint. Billing date moves with it; contract value is unchanged.', payload: { milestoneId: MS.p2c, due: addDays(T, 37) }, requestedById: U.arjun, approverId: U.priya, createdAt: ago(1, 16) },
     { kind: 'Quotation', docType: 'quote', docId: Q.q1, ref: 'QT-2026-0088', title: 'Retest add-on for Northwind Retail', detail: '12% discount is above the 10% limit for Sales, so it needs a second approver.', amount: 240000, requestedById: U.rohan, approverId: U.priya, createdAt: ago(1, 12) },
     { kind: 'Asset request', ref: 'AST-REQ-031', title: 'Two Android test devices for Fleet Portal', detail: 'Assigned to the project for its duration, returned to the asset pool at handover.', amount: 68000, payload: { assetCode: 'AST-0020', projectId: P.p2 }, requestedById: U.dev, approverId: U.priya, createdAt: ago(3, 11) },
@@ -242,7 +242,7 @@ async function main() {
   for (const [name, cust, value, owner, stage, next] of opps) await prisma.opportunity.create({ data: { name, customerId: C[cust], value, ownerId: U[owner], stage, next } });
 
   await prisma.auditLog.createMany({ data: [
-    { icon: 'icon-file-check', text: 'Meera Nair submitted INV-2026-0142 for approval', who: 'Meera Nair', userId: U.meera, area: 'invoice', createdAt: new Date(Date.now() - 2 * 3600e3) },
+    { icon: 'icon-file-check', text: 'Meera Nair submitted the Brightline Health integrations invoice for approval', who: 'Meera Nair', userId: U.meera, area: 'invoice', createdAt: new Date(Date.now() - 2 * 3600e3) },
     { icon: 'icon-wallet', text: 'Recorded RCP-2026-0064 against INV-2026-0118', who: 'Meera Nair', userId: U.meera, area: 'payment', createdAt: ago(1, 15) },
     { icon: 'icon-scroll-text', text: 'Rohan Das submitted QT-2026-0088 for approval', who: 'Rohan Das', userId: U.rohan, area: 'quote', createdAt: ago(1, 12) },
     { icon: 'icon-key-round', text: 'Granted invoice.approve to Finance', who: 'Anand Iyer', userId: U.anand, area: 'access', createdAt: ago(3) },
@@ -252,7 +252,7 @@ async function main() {
   ] });
 
   await prisma.notification.createMany({ data: [
-    { userId: U.priya, icon: 'icon-badge-check', text: 'Meera asked you to approve INV-2026-0142', link: '/approvals', createdAt: new Date(Date.now() - 2 * 3600e3) },
+    { userId: U.priya, icon: 'icon-badge-check', text: 'Meera asked you to approve the Brightline Health integrations invoice', link: '/approvals', createdAt: new Date(Date.now() - 2 * 3600e3) },
     { userId: U.priya, icon: 'icon-circle-alert', text: 'Access review sign-off is 2 days overdue', link: '/tasks', createdAt: ago(0, 8) },
     { userId: U.priya, icon: 'icon-wallet', text: 'Kestrel Bank paid ₹4,36,600 against INV-2026-0118', link: '/payments', createdAt: ago(1, 15) },
     { userId: U.priya, icon: 'icon-message-square', text: 'Arjun commented on Offline sync spike', link: '/tasks', createdAt: ago(1, 17) },
@@ -271,7 +271,7 @@ async function main() {
   const raRoles: Record<string, string> = {};
   for (const [i, r] of DEFAULT_ROLES.entries()) raRoles[r.name] = (await prisma.role.create({ data: { name: r.name, desc: r.desc, builtIn: !!r.builtIn, perms: r.perms, sort: i } })).id;
   await prisma.membership.create({ data: { accountId: A.priya, email: 'priya@democonsulting.in', name: 'Priya Raman', title: 'Founder', roleId: raRoles.Owner, status: 'Active', calendar: false, joinedAt: new Date() } });
-  const ra = await prisma.legalEntity.create({ data: { name: 'Raman Advisory LLP', gstin: '33AAKFR4821M1Z6', pan: 'AAKFR4821M', cin: '', address: 'Old No. 12, Cathedral Road, Chennai 600086', bank: '', upi: '', isDefault: true } });
+  const ra = await prisma.legalEntity.create({ data: { name: 'Raman Advisory LLP', gstin: '33AAKFR4821M1Z6', state: '33', pan: 'AAKFR4821M', cin: '', address: 'Old No. 12, Cathedral Road, Chennai 600086', bank: '', upi: '', isDefault: true } });
   const fy = { pattern: '{prefix}-{fy}-{seq}', padding: 4, next: 1, reset: 'every financial year' };
   await prisma.series.createMany({ data: [
     { type: 'INVOICE', entityId: ra.id, label: 'Invoices', prefix: 'INV', ...fy }, { type: 'CREDIT_NOTE', entityId: ra.id, label: 'Credit notes', prefix: 'CN', ...fy },

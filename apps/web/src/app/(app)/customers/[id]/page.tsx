@@ -8,14 +8,15 @@ import { InvoiceRowCompact, QuoteRowCompact } from '@/components/docs';
 
 export default function CustomerDetail() {
   const { id } = useParams<{ id: string }>(); const router = useRouter();
-  const { person, can, has, setUi } = useApp();
+  const { person, can, has, setUi, me } = useApp();
   const c = useQ<Customer[]>('customers').data?.find(x => x.id === id);
   const projects = (useQ<Project[]>(can('projects') ? 'projects' : null).data || []).filter(p => p.customerId === id);
   const quotes = (useQ<Quote[]>(can('sales') ? 'quotes' : null).data || []).filter(q => q.customerId === id);
   const invoices = (useQ<Invoice[]>(can('billing') ? 'invoices' : null).data || []).filter(i => i.customerId === id);
   if (!c) return <p style={{ color: '#64748b' }}>Loading…</p>;
   const openQ = quotes.filter(q => ['DRAFT', 'PENDING_APPROVAL', 'APPROVED', 'SENT', 'ACCEPTED'].includes(q.status)).reduce((a, q) => a + q.calc.grand, 0);
-  const details: [string, string][] = [['GSTIN', c.gstin], ['State', `${c.state} (${c.gstin.slice(0, 2)})`], ['GST on invoices', gstText(c.intra)], ['Payment terms', `Net ${c.terms} days`], ['Billing contact', c.contact || '—'], ['Billing email', c.email || '—'], ['Phone', c.phone || '—'], ['Customer since', fmtMonYear(c.since)]];
+  const anyGst = me.entities.some(e => e.gst);
+  const details: [string, string][] = [['GSTIN', c.gstin || 'Not registered'], ['State', `${c.state} (${c.stateCode})`], ...(anyGst ? [['GST on invoices', gstText(c.intra)] as [string, string]] : []), ['Payment terms', `Net ${c.terms} days`], ['Billing contact', c.contact || '—'], ['Billing email', c.email || '—'], ['Phone', c.phone || '—'], ['Customer since', fmtMonYear(c.since)]];
   return <>
     <Back label="Customers" onClick={() => router.push('/customers')} />
     <PageHead title={c.name} sub={`${c.city}, ${c.state} · account owner ${person(c.ownerId).name}`} right={

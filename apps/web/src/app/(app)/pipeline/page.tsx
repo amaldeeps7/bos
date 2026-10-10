@@ -5,6 +5,7 @@ import { DealDialog } from '@/components/forms';
 import { useAct, useApp, useQ } from '@/lib/app';
 import type { Opportunity } from '@/lib/types';
 import { Avatar, Btn, Icon, PageHead } from '@/components/ui';
+import { ExportBtn } from '@/components/export-btn';
 
 export default function Pipeline() {
   const { person, has } = useApp(); const act = useAct();
@@ -16,6 +17,7 @@ export default function Pipeline() {
       <div style={{ display: 'flex', gap: 28 }}>
         <div><p style={{ margin: 0, fontSize: 13, color: '#64748b', fontWeight: 500 }}>Open value</p><p className="num" style={{ margin: '2px 0 0', fontSize: 20, fontWeight: 600 }}>{inr(open.reduce((a, o) => a + o.value, 0))}</p></div>
         <div><p style={{ margin: 0, fontSize: 13, color: '#64748b', fontWeight: 500 }}>Weighted</p><p className="num" style={{ margin: '2px 0 0', fontSize: 20, fontWeight: 600 }}>{inr(open.reduce((a, o) => a + o.value * STAGE_PROB[o.stage], 0))}</p></div>
+        <div style={{ alignSelf: 'flex-end' }}><ExportBtn name="pipeline" rows={() => opps.map(o => ({ Deal: o.name, Customer: o.customer, Stage: STAGES[o.stage], Value: o.value, Probability: STAGE_PROB[o.stage], Weighted: Math.round(o.value * STAGE_PROB[o.stage]), Owner: person(o.ownerId).name, 'Next step': o.next }))} /></div>
         {edit && <Btn kind="pri" icon="plus" onClick={() => setDeal('new')} style={{ alignSelf: 'flex-end' }}>New deal</Btn>}
       </div>} />
     {deal && <DealDialog deal={deal === 'new' ? undefined : deal} onClose={() => setDeal(null)} />}

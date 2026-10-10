@@ -1,7 +1,7 @@
 'use client';
 import { CSSProperties, useEffect, useState } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
-import { ALL_PERMS, PERM_GROUPS, SERIES_TOKENS, fmtD, fmtDLong, formatNumber, permLabel, stateOf, addDays } from '@bos/shared';
+import { ALL_PERMS, PERM_GROUPS, SERIES_TOKENS, STATE_CODES, fmtD, fmtDLong, formatNumber, permLabel, addDays } from '@bos/shared';
 import { useAct, useApp, useQ } from '@/lib/app';
 import { api } from '@/lib/api';
 import { useQueryClient } from '@tanstack/react-query';
@@ -86,6 +86,8 @@ function Org({ s }: { s: Settings }) {
   </>;
 }
 
+const stateOptions = Object.entries(STATE_CODES).sort((a, b) => a[1].localeCompare(b[1])).map(([c, n]) => <option key={c} value={c}>{n}</option>);
+
 function Entities({ s }: { s: Settings }) {
   const act = useAct(); const [edit, setEdit] = useState<string | null>(null); const [draft, setDraft] = useState<any>(null); const [adding, setAdding] = useState(false);
   const field = (k: string, label: string, opts: { full?: boolean; mono?: boolean; max?: number } = {}) => (
@@ -93,24 +95,28 @@ function Entities({ s }: { s: Settings }) {
   );
   return (
     <Card>
-      <CardHead title="Legal entities" sub="Who issues each document. One entity per GSTIN, each with its own invoice, credit note and receipt numbers." right={<Btn size="sm" icon="plus" onClick={() => setAdding(true)}>Add entity</Btn>} />
+      <CardHead title="Legal entities" sub="Who issues each document. One entity per GSTIN (or one not registered for GST), each with its own invoice, credit note and receipt numbers." right={<Btn size="sm" icon="plus" onClick={() => setAdding(true)}>Add entity</Btn>} />
       {adding && <EntityDialog onClose={() => setAdding(false)} />}
       {s.entities.map(le => (
         <div key={le.id} style={{ padding: '16px 20px', borderBottom: '1px solid #f1f5f9', display: 'flex', flexDirection: 'column', gap: 14 }}>
           <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px 12px' }}>
             <p style={{ margin: 0, fontSize: 15, fontWeight: 600, flex: '1 1 220px' }}>{le.name}</p>
             {le.isDefault ? <span style={{ ...badgeStyle('primary'), gap: 0 }}>Issues new documents</span> : <button className="link" onClick={() => act(`settings/entities/${le.id}/default`)}>Make default</button>}
-            {edit !== le.id && <Btn size="sm" onClick={() => { setEdit(le.id); setDraft({ ...le }); }} style={{ boxShadow: 'none' }}>Edit</Btn>}
+            {edit !== le.id && <Btn size="sm" onClick={() => { setEdit(le.id); setDraft({ ...le, state: le.stateCode }); }} style={{ boxShadow: 'none' }}>Edit</Btn>}
           </div>
           {edit !== le.id ? (
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(180px,1fr))', gap: '12px 20px' }}>
-              <Kv k="GSTIN" v={le.gstin} mono /><Kv k="State" v={le.state} /><Kv k="PAN" v={le.pan} mono /><Kv k="CIN / LLPIN" v={le.cin} mono />
+              {le.gst ? <Kv k="GSTIN" v={le.gstin} mono /> : <Kv k="GST" v="Not registered — no tax on its documents" />}<Kv k="State" v={le.state} /><Kv k="PAN" v={le.pan || '—'} mono /><Kv k="CIN / LLPIN" v={le.cin} mono />
               <Kv k="Registered address" v={le.address} style={{ gridColumn: '1/-1' }} />
               <Kv k="Bank account" v={le.bank} style={{ gridColumn: 'span 2' }} /><Kv k="UPI" v={le.upi} />
             </div>
           ) : <>
+            <ToggleRow label="Registered for GST" desc={draft.gst ? 'Quotations and invoices charge GST and print the GSTIN.' : 'Plain quotations and invoices: no GSTIN, SAC, tax or place of supply. Drafts follow; issued documents don’t change.'}
+              on={draft.gst} onClick={() => setDraft({ ...draft, gst: !draft.gst, gstin: draft.gst ? '' : le.gstin })} style={{ padding: 0 }} />
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(200px,1fr))', gap: 14 }}>
-              {field('name', 'Registered name', { full: true })}{field('gstin', 'GSTIN', { mono: true, max: 15 })}{field('pan', 'PAN', { mono: true, max: 10 })}
+              {field('name', 'Registered name', { full: true })}
+              {draft.gst ? field('gstin', 'GSTIN', { mono: true, max: 15 }) : <label className="label">State<select className="select" value={draft.state} onChange={e => setDraft({ ...draft, state: e.target.value })}><option value="">Pick a state…</option>{stateOptions}</select></label>}
+              {field('pan', 'PAN', { mono: true, max: 10 })}
               {field('address', 'Registered address', { full: true })}{field('bank', 'Bank account')}{field('upi', 'UPI ID')}
             </div>
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}><Btn onClick={() => setEdit(null)} style={{ boxShadow: 'none' }}>Cancel</Btn><Btn kind="pri" onClick={async () => { const r = await act(`settings/entities/${le.id}`, draft, { method: 'PATCH' }); if (r) setEdit(null); }}>Save entity</Btn></div>
@@ -358,7 +364,10 @@ function Templates({ s }: { s: Settings }) {
   useEffect(() => setT(s.templates[kind]), [kind, s.templates]);
   const isInv = kind === 'invoice'; const le = s.entities.find(e => e.isDefault) || s.entities[0];
   const compact = t.layout === 'Compact', modern = t.layout === 'Modern';
-  const grid = t.show.sac ? '1fr 50px 44px 66px 74px' : '1fr 44px 66px 74px';
+  const isInv0 = kind === 'invoice'; const le0 = s.entities.find(e => e.isDefault) || s.entities[0];
+  const gst = le0?.gst !== false; const sac = t.show.sac && gst; // a non-GST entity's documents carry no SAC or tax
+  const title0 = t.title || (isInv0 ? 'Tax invoice' : 'Quotation'); const title = gst ? title0 : title0.replace(/^tax\s+invoice/i, 'Invoice');
+  const grid = sac ? '1fr 50px 44px 66px 74px' : '1fr 44px 66px 74px';
   const gTot: CSSProperties = { fontWeight: 600, paddingTop: 5, marginTop: 2, borderTop: '1px solid #cbd5e1', fontSize: '1.15em' };
   const def = s.entities.find(e => e.isDefault)?.id;
   const sr = s.series.find(x => x.type === (isInv ? 'INVOICE' : 'QUOTATION') && (!isInv || x.entityId === def)) || s.series.find(x => x.type === (isInv ? 'INVOICE' : 'QUOTATION'))!;
@@ -389,27 +398,27 @@ function Templates({ s }: { s: Settings }) {
       <div style={{ background: '#e7ebf0', borderRadius: 12, padding: 20, display: 'flex', flexDirection: 'column', gap: 10 }}>
         <p style={{ margin: 0, fontSize: 13, fontWeight: 500, color: '#475569' }}>Preview, with sample figures</p>
         <div style={{ background: '#fff', borderRadius: 4, boxShadow: '0 8px 24px -8px rgba(15,23,42,.25)', padding: compact ? 18 : 28, display: 'flex', flexDirection: 'column', gap: compact ? 10 : 16, fontSize: compact ? 10.5 : 11.5, lineHeight: 1.45, color: '#0f172a', width: '100%', maxWidth: 560, minHeight: compact ? 560 : 680, margin: '0 auto', borderTop: modern ? 'none' : `4px solid ${t.accent}`, overflow: 'hidden' }}>
-          {modern && <div style={{ margin: compact ? '-18px -18px 0' : '-28px -28px 0', padding: compact ? '12px 18px' : '16px 28px', background: t.accent, color: '#fff', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, fontSize: 15, fontWeight: 600 }}><span>{t.title || (isInv ? 'Tax invoice' : 'Quotation')}</span><span className="mono" style={{ fontSize: 12, fontWeight: 500 }}>{no}</span></div>}
+          {modern && <div style={{ margin: compact ? '-18px -18px 0' : '-28px -28px 0', padding: compact ? '12px 18px' : '16px 28px', background: t.accent, color: '#fff', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, fontSize: 15, fontWeight: 600 }}><span>{title}</span><span className="mono" style={{ fontSize: 12, fontWeight: 500 }}>{no}</span></div>}
           <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16, alignItems: 'flex-start' }}>
             <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start', minWidth: 0 }}>
               {t.show.logo && <span style={{ width: 34, height: 34, flex: 'none', borderRadius: 8, background: t.accent, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 600 }}>{ini}</span>}
-              <div style={{ minWidth: 0 }}><p style={{ margin: 0, fontWeight: 600, fontSize: '1.15em' }}>{le.name}</p><p style={{ margin: '2px 0 0', color: '#475569' }}>{le.address}</p><p style={{ margin: '2px 0 0', color: '#475569' }}>GSTIN {le.gstin}</p></div>
+              <div style={{ minWidth: 0 }}><p style={{ margin: 0, fontWeight: 600, fontSize: '1.15em' }}>{le.name}</p><p style={{ margin: '2px 0 0', color: '#475569' }}>{le.address}</p>{gst && <p style={{ margin: '2px 0 0', color: '#475569' }}>GSTIN {le.gstin}</p>}</div>
             </div>
-            {!modern && <div style={{ textAlign: 'right', flex: 'none' }}><p style={{ margin: 0, fontSize: compact ? 15 : 18, fontWeight: 600, color: t.accent, letterSpacing: '-0.01em' }}>{t.title || (isInv ? 'Tax invoice' : 'Quotation')}</p><p className="mono" style={{ margin: '2px 0 0', color: '#475569' }}>{no}</p></div>}
+            {!modern && <div style={{ textAlign: 'right', flex: 'none' }}><p style={{ margin: 0, fontSize: compact ? 15 : 18, fontWeight: 600, color: t.accent, letterSpacing: '-0.01em' }}>{title}</p><p className="mono" style={{ margin: '2px 0 0', color: '#475569' }}>{no}</p></div>}
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 16, padding: '10px 0', borderTop: '1px solid #e2e8f0', borderBottom: '1px solid #e2e8f0' }}>
-            <div><p style={{ margin: 0, color: '#64748b' }}>{isInv ? 'Bill to' : 'Prepared for'}</p><p style={{ margin: '2px 0 0', fontWeight: 600 }}>{cust.name}</p><p style={{ margin: 0, color: '#475569' }}>GSTIN {cust.gstin} · {cust.city}</p></div>
+            <div><p style={{ margin: 0, color: '#64748b' }}>{isInv ? 'Bill to' : 'Prepared for'}</p><p style={{ margin: '2px 0 0', fontWeight: 600 }}>{cust.name}</p><p style={{ margin: 0, color: '#475569' }}>{gst ? `GSTIN ${cust.gstin} · ` : ''}{cust.city}</p></div>
             <div style={{ display: 'grid', gridTemplateColumns: 'auto auto', gap: '2px 12px', alignContent: 'start' }}><span style={{ color: '#64748b' }}>Date</span><span style={{ textAlign: 'right' }}>{fmtDLong(today)}</span><span style={{ color: '#64748b' }}>{isInv ? 'Due date' : 'Valid until'}</span><span style={{ textAlign: 'right' }}>{fmtD(addDays(today, 30))}</span></div>
           </div>
           <div>
-            <div style={{ display: 'grid', gridTemplateColumns: grid, gap: 8, padding: compact ? '4px 0' : '6px 0', borderBottom: `1.5px solid ${t.accent}`, fontWeight: 600, color: t.accent }}><span>Description</span>{t.show.sac && <span>SAC</span>}<span style={{ textAlign: 'right' }}>Qty</span><span style={{ textAlign: 'right' }}>Rate</span><span style={{ textAlign: 'right' }}>Amount</span></div>
-            {SAMPLE.map(l => <div key={l.d} style={{ display: 'grid', gridTemplateColumns: grid, gap: 8, padding: compact ? '4px 0' : '7px 0', borderBottom: '1px solid #e2e8f0' }}><span>{l.d}</span>{t.show.sac && <span className="mono" style={{ color: '#64748b' }}>{l.sac}</span>}<span style={{ textAlign: 'right' }}>{l.qty}</span><span style={{ textAlign: 'right' }}>{l.rate}</span><span style={{ textAlign: 'right' }}>{l.amt}</span></div>)}
+            <div style={{ display: 'grid', gridTemplateColumns: grid, gap: 8, padding: compact ? '4px 0' : '6px 0', borderBottom: `1.5px solid ${t.accent}`, fontWeight: 600, color: t.accent }}><span>Description</span>{sac && <span>SAC</span>}<span style={{ textAlign: 'right' }}>Qty</span><span style={{ textAlign: 'right' }}>Rate</span><span style={{ textAlign: 'right' }}>Amount</span></div>
+            {SAMPLE.map(l => <div key={l.d} style={{ display: 'grid', gridTemplateColumns: grid, gap: 8, padding: compact ? '4px 0' : '7px 0', borderBottom: '1px solid #e2e8f0' }}><span>{l.d}</span>{sac && <span className="mono" style={{ color: '#64748b' }}>{l.sac}</span>}<span style={{ textAlign: 'right' }}>{l.qty}</span><span style={{ textAlign: 'right' }}>{l.rate}</span><span style={{ textAlign: 'right' }}>{l.amt}</span></div>)}
           </div>
           <div style={{ display: 'flex', justifyContent: 'flex-end' }}><div className="num" style={{ width: '58%', display: 'grid', gridTemplateColumns: '1fr auto', gap: '3px 12px' }}>
-            <span>Taxable value</span><span style={{ textAlign: 'right' }}>₹3,20,000</span><span style={{ color: '#64748b' }}>CGST 9%</span><span style={{ textAlign: 'right', color: '#64748b' }}>₹28,800</span><span style={{ color: '#64748b' }}>SGST 9%</span><span style={{ textAlign: 'right', color: '#64748b' }}>₹28,800</span>
-            <span style={gTot}>Total</span><span style={{ ...gTot, textAlign: 'right', color: t.accent }}>₹3,77,600</span>
+            {gst ? <><span>Taxable value</span><span style={{ textAlign: 'right' }}>₹3,20,000</span><span style={{ color: '#64748b' }}>CGST 9%</span><span style={{ textAlign: 'right', color: '#64748b' }}>₹28,800</span><span style={{ color: '#64748b' }}>SGST 9%</span><span style={{ textAlign: 'right', color: '#64748b' }}>₹28,800</span></> : <><span>Subtotal</span><span style={{ textAlign: 'right' }}>₹3,20,000</span></>}
+            <span style={gTot}>Total</span><span style={{ ...gTot, textAlign: 'right', color: t.accent }}>{gst ? '₹3,77,600' : '₹3,20,000'}</span>
           </div></div>
-          {t.show.words && <p style={{ margin: 0, color: '#475569' }}><span style={{ color: '#64748b' }}>In words: </span>Rupees three lakh seventy-seven thousand six hundred only</p>}
+          {t.show.words && <p style={{ margin: 0, color: '#475569' }}><span style={{ color: '#64748b' }}>In words: </span>{gst ? 'Rupees three lakh seventy-seven thousand six hundred only' : 'Rupees three lakh twenty thousand only'}</p>}
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, alignItems: 'flex-end', justifyContent: 'space-between', marginTop: 'auto' }}>
             {t.show.bank && <div style={{ minWidth: 0, flex: '1 1 150px' }}><p style={{ margin: 0, color: '#64748b' }}>Bank details</p><p style={{ margin: '2px 0 0' }}>{le.bank}</p></div>}
             {t.show.upi && <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}><span style={{ width: 60, height: 60, border: '1px dashed #94a3b8', borderRadius: 6, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#64748b' }}>UPI QR</span><span style={{ color: '#64748b' }}>{le.upi}</span></div>}
@@ -469,7 +478,7 @@ function Tax({ s }: { s: Settings }) {
   return <>
     <Card>
       <CardHead title="GST registrations" sub={<span style={{ display: 'block', maxWidth: '70ch' }}>Customer in the same state as the issuing entity: CGST + SGST. Different state: IGST. Worked out per document from the two GSTINs.</span>} />
-      {s.entities.map(e => <div key={e.id} style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '6px 20px', padding: '12px 20px', borderBottom: '1px solid #f1f5f9', fontSize: 14 }}><span style={{ flex: '1 1 220px', fontWeight: 500 }}>{e.name}</span><span className="mono" style={{ fontSize: 13 }}>{e.gstin}</span><span style={{ width: 130, color: '#64748b' }}>{stateOf(e.gstin) || 'Unrecognised'}</span></div>)}
+      {s.entities.map(e => <div key={e.id} style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '6px 20px', padding: '12px 20px', borderBottom: '1px solid #f1f5f9', fontSize: 14 }}><span style={{ flex: '1 1 220px', fontWeight: 500 }}>{e.name}</span><span className="mono" style={{ fontSize: 13 }}>{e.gst ? e.gstin : 'Not registered'}</span><span style={{ width: 130, color: '#64748b' }}>{e.state}</span></div>)}
     </Card>
     <Card>
       <CardHead title="Service codes (SAC)" sub="The GST rate each code charges. Changing one affects new lines only." />

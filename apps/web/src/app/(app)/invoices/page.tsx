@@ -2,6 +2,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { INVOICE_STATUS, fmtD, inr } from '@bos/shared';
+import { ExportBtn } from '@/components/export-btn';
 import { useApp, useQ } from '@/lib/app';
 import type { Customer, Invoice } from '@/lib/types';
 import { Btn, Card, PageHead, Status, Tabs } from '@/components/ui';
@@ -12,8 +13,15 @@ const COLS = 'minmax(240px,2fr) minmax(150px,1.1fr) 140px 90px 120px 120px';
 export default function Invoices() {
   const router = useRouter(); const { has } = useApp();
   const invoices = useQ<Invoice[]>('invoices').data || [];
-  const cust = new Map((useQ<Customer[]>('customers').data || []).map(c => [c.id, c.name]));
+  const custs = useQ<Customer[]>('customers').data || [];
+  const cust = new Map(custs.map(c => [c.id, c.name])); const cfull = new Map(custs.map(c => [c.id, c]));
   const [tab, setTab] = useState<Tab>('all');
+  // One row per invoice, with the GST split an accountant files from.
+  const tax = (i: Invoice, kind: string) => i.calc.taxRows.filter(([l]) => l.startsWith(kind)).reduce((a, [, v]) => a + v, 0);
+  const csvRows = () => rows.map(i => { const c = cfull.get(i.customerId); return {
+    'Invoice no.': i.no.startsWith('DRAFT-') ? '' : i.no, Date: i.date, 'Due date': i.due, Status: INVOICE_STATUS[i.displayStatus]?.[0] || i.displayStatus,
+    Customer: c?.name || '', 'Customer GSTIN': c?.gstin || '', 'Place of supply': c?.state || '', 'Issued by': i.entity, Title: i.title,
+    'Taxable value': i.calc.taxable, CGST: tax(i, 'CGST'), SGST: tax(i, 'SGST'), IGST: tax(i, 'IGST'), Total: i.calc.grand, Received: i.paid, Credited: i.credited, Balance: i.bal }; });
   const f: Record<Tab, (i: Invoice) => boolean> = { all: () => true, action: i => ['DRAFT', 'PENDING_APPROVAL', 'APPROVED', 'ISSUED'].includes(i.status), unpaid: i => i.bal > 0, paid: i => i.status === 'PAID' };
   const rows = invoices.filter(f[tab]);
   const stat = (label: string, v: string, red?: boolean) => <div><p style={{ margin: 0, fontSize: 13, color: '#64748b', fontWeight: 500 }}>{label}</p><p className="num" style={{ margin: '2px 0 0', fontSize: 20, fontWeight: 600, color: red ? '#be123c' : undefined }}>{v}</p></div>;
@@ -21,6 +29,7 @@ export default function Invoices() {
     <PageHead title="Invoices" sub="Raised from milestones, quotations, or from scratch. GST follows the customer's place of supply." subStyle={{ maxWidth: '62ch' }} right={
       <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-end', gap: '16px 28px' }}>
         {stat('Outstanding', inr(invoices.reduce((a, i) => a + i.bal, 0)))}{stat('Overdue', inr(invoices.filter(i => i.overdue).reduce((a, i) => a + i.bal, 0)), true)}
+        <ExportBtn name="invoices" rows={csvRows} />
         {has('invoice.create') && <Btn kind="pri" icon="plus" onClick={() => router.push('/invoices/new')}>New invoice</Btn>}
       </div>} />
     <Tabs tabs={([['all', 'All'], ['action', 'To finish'], ['unpaid', 'Unpaid'], ['paid', 'Paid']] as [Tab, string][]).map(([id, label]) => ({ id, label, count: invoices.filter(f[id]).length }))} value={tab} onChange={setTab} />

@@ -1,16 +1,16 @@
 import { BadRequestException, Body, Controller, Delete, ForbiddenException, Get, HttpCode, NotFoundException, Param, Patch, Post, Res } from '@nestjs/common';
 import type { Response } from 'express';
 import { DocumentsService, mailNote } from './documents.service';
-import { isValidGstin, STAGES, stateOf, UNISSUED } from '@bos/shared';
+import { placeOf, STAGES, UNISSUED } from '@bos/shared';
 import { PrismaService } from '../core/prisma.service';
 import { OrgService } from '../core/org.service';
 import { AccessService } from '../core/access.service';
 import { AuditService } from '../core/audit.service';
 import { Me, Perm } from '../core/decorators';
 import type { AuthUser } from '../core/auth.types';
-import { d, num, str, toDate } from '../core/util';
+import { d, gstParty, num, str, toDate } from '../core/util';
 import { cleanLines, FinanceService } from './finance.service';
-import { NumberingService } from '../core/numbering.service';
+import { NumberingService, draftRef } from '../core/numbering.service';
 
 const EMAIL = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 
@@ -32,21 +32,21 @@ export class CustomersController {
       if (!UNISSUED.includes(i.status)) billed.set(i.customerId, (billed.get(i.customerId) || 0) + f.k.grand);
     }
     const pc = new Map(projects.map(p => [p.customerId, p._count]));
-    return rows.map(x => ({ id: x.id, name: x.name, gstin: x.gstin, state: stateOf(x.gstin) || '', city: x.city, contact: x.contact, email: x.email, phone: x.phone,
-      terms: x.terms, ownerId: x.ownerId, since: d(x.since), outstanding: owed.get(x.id) || 0, billed: billed.get(x.id) || 0, projects: pc.get(x.id) || 0, intra: stateOf(x.gstin) === c.ourState }));
+    return rows.map(x => ({ id: x.id, name: x.name, gstin: x.gstin || '', state: placeOf(x) || '', stateCode: x.state, city: x.city, contact: x.contact, email: x.email, phone: x.phone,
+      terms: x.terms, ownerId: x.ownerId, since: d(x.since), outstanding: owed.get(x.id) || 0, billed: billed.get(x.id) || 0, projects: pc.get(x.id) || 0, intra: placeOf(x) === c.ourState }));
   }
 
   @Post() @Perm('customer.create')
   async create(@Me() me: AuthUser, @Body() b: any) {
     const name = str(b.name, 'Business name', { max: 200 }).trim();
     if (!name) throw new BadRequestException('Enter the business name.');
-    const gstin = str(b.gstin, 'GSTIN', { max: 15 }).trim().toUpperCase();
-    if (!isValidGstin(gstin)) throw new BadRequestException('Enter a valid 15-character GSTIN.');
-    if (await this.prisma.customer.findFirst({ where: { gstin } })) throw new BadRequestException('A customer with this GSTIN already exists.');
+    // Customers not registered for GST have no GSTIN; their state sets the place of supply.
+    const { gstin, state } = gstParty(b, false);
+    if (gstin && await this.prisma.customer.findFirst({ where: { gstin } })) throw new BadRequestException('A customer with this GSTIN already exists.');
     const email = str(b.email, 'Billing email', { max: 200 }).trim();
     if (email && !EMAIL.test(email)) throw new BadRequestException('Enter a valid billing email.');
     const { today } = await this.fin.ctx();
-    const c = await this.prisma.customer.create({ data: { name, gstin, city: str(b.city, 'City', { max: 100 }).trim() || '—', contact: str(b.contact, 'Contact', { max: 200 }).trim(), email,
+    const c = await this.prisma.customer.create({ data: { name, gstin: gstin || null, state, city: str(b.city, 'City', { max: 100 }).trim() || '—', contact: str(b.contact, 'Contact', { max: 200 }).trim(), email,
       phone: str(b.phone, 'Phone', { max: 50 }).trim(), terms: num(b.terms ?? 30, 'Payment terms', { min: 0, max: 180 }), ownerId: me.id, since: toDate(today) } });
     return { id: c.id };
   }
@@ -55,7 +55,10 @@ export class CustomersController {
   async update(@Param('id') id: string, @Body() b: any) {
     const data: any = {};
     for (const f of ['name', 'city', 'contact', 'email', 'phone'] as const) if (b[f] !== undefined) data[f] = str(b[f], f, { max: 200 }).trim();
-    if (b.gstin !== undefined) { const g = String(b.gstin).toUpperCase(); if (!isValidGstin(g)) throw new BadRequestException('Enter a valid 15-character GSTIN.'); data.gstin = g; }
+    if (b.gstin !== undefined || b.state !== undefined) {
+      const cur = await this.prisma.customer.findUniqueOrThrow({ where: { id } });
+      const g = gstParty({ gstin: b.gstin ?? cur.gstin, state: b.state ?? cur.state }, false); data.gstin = g.gstin || null; data.state = g.state;
+    }
     if (b.terms !== undefined) data.terms = num(b.terms, 'Payment terms', { min: 0, max: 180 });
     if (b.email && !EMAIL.test(String(b.email))) throw new BadRequestException('Enter a valid billing email.');
     if (data.gstin) { const dup = await this.prisma.customer.findFirst({ where: { gstin: data.gstin, id: { not: id } } }); if (dup) throw new BadRequestException(`${dup.name} already has this GSTIN.`); }
@@ -181,11 +184,12 @@ export class QuotesController {
       const old = await this.one(b.id);
       if (!['DRAFT', 'SENT', 'DECLINED', 'APPROVED'].includes(old.status)) throw new BadRequestException('This quotation can no longer be changed');
       const revise = old.status !== 'DRAFT';
-      await this.prisma.quote.update({ where: { id: old.id }, data: { customerId: cust.id, ...(b.entityId ? { entityId: (await this.orgs.entity(String(b.entityId))).id } : {}), title, lines, notes: str(b.notes, 'Notes'), validUntil: new Date(old.date.getTime() + days * 86400000), status: 'DRAFT', ver: revise ? old.ver + 1 : old.ver } });
+      const e = await this.orgs.entity(b.entityId ? String(b.entityId) : old.entityId);
+      await this.prisma.quote.update({ where: { id: old.id }, data: { customerId: cust.id, entityId: e.id, gst: e.gst, title, lines, notes: str(b.notes, 'Notes'), validUntil: new Date(old.date.getTime() + days * 86400000), status: 'DRAFT', ver: revise ? old.ver + 1 : old.ver } });
       id = old.id; no = old.no;
     } else {
-      const entityId = (await this.orgs.entity(b.entityId || null)).id;
-      const q = await this.prisma.$transaction(async tx => tx.quote.create({ data: { no: await this.numbering.next('QUOTATION', {}, tx), entityId, customerId: cust.id, title, date: toDate(today), validUntil: new Date(toDate(today).getTime() + days * 86400000), status: 'DRAFT', byId: me.id, lines, notes: str(b.notes, 'Notes') } }));
+      const { id: entityId, gst } = await this.orgs.entity(b.entityId || null);
+      const q = await this.prisma.$transaction(async tx => tx.quote.create({ data: { no: await this.numbering.next('QUOTATION', {}, tx), entityId, gst, customerId: cust.id, title, date: toDate(today), validUntil: new Date(toDate(today).getTime() + days * 86400000), status: 'DRAFT', byId: me.id, lines, notes: str(b.notes, 'Notes') } }));
       id = q.id; no = q.no;
       await this.audit.log(me, `${me.name} drafted ${no}`, 'icon-scroll-text', 'quote');
     }
@@ -223,7 +227,7 @@ export class QuotesController {
   private async toProject(me: AuthUser, q: Awaited<ReturnType<QuotesController['one']>>) {
     AccessService.require(me, 'quote.convert'); AccessService.require(me, 'project.create');
     if (q.status !== 'ACCEPTED') throw new BadRequestException('Only an accepted quotation can be converted');
-    const c = await this.fin.ctx(); const k = this.fin.calcFor(q.lines, q.customerId, c, q.entityId);
+    const c = await this.fin.ctx(); const k = this.fin.calcFor(q.lines, q.customerId, c, q.entityId, q.gst);
     const { today } = c; const at = (days: number) => new Date(toDate(today).getTime() + days * 86400000);
     const p = await this.prisma.$transaction(async tx => {
       const code = await this.numbering.next('PROJECT', {}, tx);
@@ -241,14 +245,14 @@ export class QuotesController {
   private async toInvoice(me: AuthUser, q: Awaited<ReturnType<QuotesController['one']>>) {
     AccessService.require(me, 'quote.convert'); AccessService.require(me, 'invoice.create');
     if (q.status !== 'ACCEPTED') throw new BadRequestException('Only an accepted quotation can be converted');
-    const { today } = await this.fin.ctx();
+    const { today } = await this.fin.ctx(); const { gst } = await this.orgs.entity(q.entityId);
     const inv = await this.prisma.$transaction(async tx => {
-      const no = await this.numbering.next('INVOICE', { entityId: q.entityId }, tx);
-      const inv = await tx.invoice.create({ data: { no, entityId: q.entityId, customerId: q.customerId, title: q.title, date: toDate(today), due: new Date(toDate(today).getTime() + q.customer.terms * 86400000), status: 'DRAFT', byId: me.id, lines: q.lines as any, notes: `Against quotation ${q.no}.` } });
+      const no = draftRef();
+      const inv = await tx.invoice.create({ data: { no, entityId: q.entityId, gst, customerId: q.customerId, title: q.title, date: toDate(today), due: new Date(toDate(today).getTime() + q.customer.terms * 86400000), status: 'DRAFT', byId: me.id, lines: q.lines as any, notes: `Against quotation ${q.no}.` } });
       await tx.quote.update({ where: { id: q.id }, data: { status: 'CONVERTED', invoiceId: inv.id } });
       return inv;
     });
     await this.audit.log(me, `Raised ${inv.no} from ${q.no}`, 'icon-file-plus', 'invoice');
-    return { invoiceId: inv.id, message: `Draft ${inv.no} raised from ${q.no}. Submit it for approval when ready.` };
+    return { invoiceId: inv.id, message: `Draft invoice raised from ${q.no}. Submit it for approval when ready; it takes its number when issued.` };
   }
 }

@@ -46,7 +46,7 @@ export class PdfService {
     }
     doc.fillColor(ink).font('B').fontSize(base + 3).text(d.entity.name, x, y, { width: 300 });
     doc.font('R').fontSize(base).fillColor(soft);
-    for (const l of [...d.entity.lines, `GSTIN ${d.entity.gstin}`]) doc.text(l, x, doc.y + 1, { width: 300 });
+    for (const l of [...d.entity.lines, ...(d.entity.gstin ? [`GSTIN ${d.entity.gstin}`] : [])]) doc.text(l, x, doc.y + 1, { width: 300 });
     const headBottom = doc.y;
     if (!modern) {
       doc.fillColor(t.accent).font('B').fontSize(compact ? 15 : 18).text(t.title, M, y, { width, align: 'right' });
@@ -59,7 +59,7 @@ export class PdfService {
     const top = y + 10;
     doc.fillColor(muted).font('R').fontSize(base).text(d.toLabel, M, top);
     doc.fillColor(ink).font('B').fontSize(base + 1.5).text(d.to.name, M, doc.y + 1, { width: 280 });
-    doc.font('R').fontSize(base).fillColor(soft).text(`GSTIN ${d.to.gstin}`, M, doc.y + 1, { width: 280 });
+    doc.font('R').fontSize(base).fillColor(soft); if (d.to.gstin) doc.text(`GSTIN ${d.to.gstin}`, M, doc.y + 1, { width: 280 });
     for (const l of d.to.lines) doc.text(l, M, doc.y, { width: 280 });
     let leftBottom = doc.y;
     let my = top;
@@ -70,13 +70,13 @@ export class PdfService {
     y = Math.max(leftBottom, my) + 10;
     doc.moveTo(M, y).lineTo(right, y).strokeColor(line).stroke();
     y += 8;
-    doc.fillColor(muted).font('R').fontSize(base - 0.5).text(d.supplyNote + (d.reference ? ` · ${d.reference}` : ''), M, y, { width, align: 'right' });
-    y = doc.y + 8;
+    const note = [d.supplyNote, d.reference].filter(Boolean).join(' · ');
+    if (note) { doc.fillColor(muted).font('R').fontSize(base - 0.5).text(note, M, y, { width, align: 'right' }); y = doc.y + 8; }
 
     // lines
     const showDisc = d.calc.rows.some(r => +r.disc);
     type Col = { k: string; label: string; w: number; align: 'left' | 'right' };
-    const cols: Col[] = [{ k: 'd', label: 'Description', w: 0, align: 'left' }, ...(t.show.sac ? [{ k: 'sac', label: 'SAC', w: 48, align: 'left' as const }] : []),
+    const cols: Col[] = [{ k: 'd', label: 'Description', w: 0, align: 'left' }, ...(t.show.sac && d.calc.gst ? [{ k: 'sac', label: 'SAC', w: 48, align: 'left' as const }] : []),
       { k: 'qty', label: 'Qty', w: 62, align: 'right' }, { k: 'rate', label: 'Rate', w: 70, align: 'right' }, ...(showDisc ? [{ k: 'disc', label: 'Disc.', w: 38, align: 'right' as const }] : []),
       { k: 'amt', label: 'Amount', w: 78, align: 'right' }];
     cols[0].w = width - cols.slice(1).reduce((a, c) => a + c.w + 8, 0);
@@ -96,7 +96,7 @@ export class PdfService {
 
     // totals
     const tx = right - 230; y += 4;
-    const totals: [string, string, boolean?][] = [['Subtotal', inr(d.calc.sub)], ...(d.calc.disc ? [['Discount', '−' + inr(d.calc.disc)] as [string, string]] : []), ['Taxable value', inr(d.calc.taxable)],
+    const totals: [string, string, boolean?][] = [['Subtotal', inr(d.calc.sub)], ...(d.calc.disc ? [['Discount', '−' + inr(d.calc.disc)] as [string, string]] : []), ...(d.calc.gst ? [['Taxable value', inr(d.calc.taxable)] as [string, string]] : []),
       ...d.calc.taxRows.map(([l, v]) => [l, inr(v), true] as [string, string, boolean])];
     for (const [l, v, m] of totals) { doc.fillColor(m ? muted : ink).font('R').fontSize(base).text(l, tx, y, { width: 130 }); doc.text(v, tx + 130, y, { width: 100, align: 'right' }); y += base + 6; }
     doc.moveTo(tx, y).lineTo(right, y).lineWidth(0.75).strokeColor('#cbd5e1').stroke(); y += 6;

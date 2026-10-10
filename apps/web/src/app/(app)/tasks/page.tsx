@@ -6,11 +6,12 @@ import { useApp, useQ } from '@/lib/app';
 import type { Project, Task } from '@/lib/types';
 import { Btn, Card, PageHead, Tabs } from '@/components/ui';
 import { TaskListRow } from '@/components/task-row';
+import { ExportBtn } from '@/components/export-btn';
 
 type Tab = 'mine' | 'byme' | 'all';
 
 export default function Tasks() {
-  const { me, today, setUi, has } = useApp(); const params = useSearchParams();
+  const { me, today, setUi, has, person } = useApp(); const params = useSearchParams();
   const tasks = useQ<Task[]>('tasks').data || [];
   const projects = useQ<Project[]>('projects').data || [];
   const pmap = new Map(projects.map(p => [p.id, p]));
@@ -22,7 +23,9 @@ export default function Tasks() {
   const buckets: [string, (t: Task) => boolean, string][] = [['Overdue', t => t.status !== 'done' && o(t) < 0, '#be123c'], ['Today', t => t.status !== 'done' && o(t) === 0, '#b45309'], ['This week', t => t.status !== 'done' && o(t) > 0 && o(t) <= 7, '#0f172a'], ['Later', t => t.status !== 'done' && o(t) > 7, '#0f172a'], ['Done', t => t.status === 'done', '#64748b']];
   const groups = buckets.map(([label, f, c]) => ({ label, c, rows: list.filter(f).sort((a, b) => a.due.localeCompare(b.due)) })).filter(g => g.rows.length);
   return <>
-    <PageHead title="Tasks" sub="Work you own, and work you've handed out." right={has('task.create') && <Btn kind="pri" icon="plus" onClick={() => setUi({ newTask: { projectId: '' } })}>New task</Btn>} />
+    <PageHead title="Tasks" sub="Work you own, and work you've handed out." right={<div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+      <ExportBtn name="tasks" rows={() => list.map(t => ({ Key: t.key, Title: t.title, Project: projects.find(p => p.id === t.projectId)?.name || '', Assignee: person(t.assigneeId).name, 'Assigned by': person(t.reporterId).name, Due: t.due, Status: t.status, Priority: t.priority }))} />
+      {has('task.create') && <Btn kind="pri" icon="plus" onClick={() => setUi({ newTask: { projectId: '' } })}>New task</Btn>}</div>} />
     <Tabs tabs={tabs} value={tab} onChange={setTab} />
     <Card style={{ overflow: 'hidden' }}>
       {groups.map(g => (

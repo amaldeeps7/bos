@@ -7,15 +7,18 @@ import { barColor, projStats } from '@/lib/domain';
 import type { Project } from '@/lib/types';
 import { Btn, Card, PageHead, badgeStyle } from '@/components/ui';
 import { ProjectDialog } from '@/components/forms';
+import { ExportBtn } from '@/components/export-btn';
 
 const Dot = () => <span style={{ width: 6, height: 6, borderRadius: 999, background: 'currentColor' }} />;
 const COLS = 'minmax(240px,2.2fr) minmax(150px,1.2fr) 120px minmax(150px,1fr) 130px 90px';
 
 export default function Projects() {
-  const { isMobile, has } = useApp(); const router = useRouter(); const [creating, setCreating] = useState(false);
+  const { isMobile, has, person } = useApp(); const router = useRouter(); const [creating, setCreating] = useState(false);
   const projects = useQ<Project[]>('projects').data || [];
   return <>
-    <PageHead title="Projects" sub="Engagements, their milestones, and what's left to bill." right={has('project.create') && <Btn kind="pri" icon="plus" onClick={() => setCreating(true)}>New project</Btn>} />
+    <PageHead title="Projects" sub="Engagements, their milestones, and what's left to bill." right={<div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+      <ExportBtn name="projects" rows={() => projects.map(p => { const billed = p.milestones.filter(m => ['INVOICED', 'PAID'].includes(m.status)).reduce((a, m) => a + m.value, 0); return { Code: p.code, Name: p.name, Customer: p.customer, 'Business unit': p.bu, Owner: person(p.ownerId).name, Status: p.status, Health: p.health, 'End date': p.endDate, 'Contract value': p.contract, Billed: billed, 'Left to bill': p.contract - billed, Milestones: p.milestones.length }; })} />
+      {has('project.create') && <Btn kind="pri" icon="plus" onClick={() => setCreating(true)}>New project</Btn>}</div>} />
     {creating && <ProjectDialog onClose={() => setCreating(false)} />}
     {!isMobile ? (
       <Card style={{ overflowX: 'auto' }}>

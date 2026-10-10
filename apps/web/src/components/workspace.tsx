@@ -1,7 +1,7 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { isValidGstin, stateOf } from '@bos/shared';
+import { STATE_CODES, isValidGstin, stateOf } from '@bos/shared';
 import { api, ApiError } from '@/lib/api';
 import { useAct, useApp, useQ } from '@/lib/app';
 import type { DataInfo, PlanInfo, Settings } from '@/lib/types';
@@ -132,22 +132,25 @@ function CloseDialog({ onClose, days }: { onClose: () => void; days: number }) {
 /** Another registered business (one per GSTIN), with its own invoice, credit note and receipt series. */
 export function EntityDialog({ onClose }: { onClose: () => void }) {
   const qc = useQueryClient(); const { toast } = useApp();
-  const [f, setF] = useState({ name: '', gstin: '', address: '', bank: '', upi: '' }); const [err, setErr] = useState(''); const [busy, setBusy] = useState(false);
+  const [f, setF] = useState({ name: '', gst: true, gstin: '', state: '', address: '', bank: '', upi: '' }); const [err, setErr] = useState(''); const [busy, setBusy] = useState(false);
   const g = f.gstin; const st = stateOf(g);
   const hint = !g ? 'The first two digits are the state code. They decide CGST + SGST or IGST.' : g.length < 15 ? `${g.length} of 15 characters${st ? ` · ${st}` : ''}` : st ? `${st} · PAN ${g.slice(2, 12)}` : 'That state code isn’t recognised.';
   const save = async () => {
-    if (!isValidGstin(g)) return setErr('Enter a valid 15-character GSTIN.');
+    if (f.gst && !isValidGstin(g)) return setErr('Enter a valid 15-character GSTIN.');
+    if (!f.gst && !f.state) return setErr('Pick the state.');
     setBusy(true); setErr('');
     try { const r = await api<{ message: string }>('settings/entities', { body: f }); await qc.invalidateQueries(); toast(r.message); onClose(); }
     catch (e) { setErr(e instanceof ApiError ? e.message : 'Something went wrong.'); setBusy(false); }
   };
   return (
-    <Dialog width={540} title="Add legal entity" sub="Registered in another state? Each GSTIN is its own entity with its own invoice series." onClose={onClose}
+    <Dialog width={540} title="Add legal entity" sub="Registered in another state, or a business that isn't registered for GST? Each is its own entity with its own invoice series." onClose={onClose}
       footer={<><Btn onClick={onClose} style={{ boxShadow: 'none' }}>Cancel</Btn><Btn kind="pri" onClick={save} disabled={busy}>{busy ? 'Adding…' : 'Add entity'}</Btn></>}>
       <div style={{ padding: '18px 20px', display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(200px,1fr))', gap: 14 }}>
         <label className="label" style={{ gridColumn: '1/-1' }}>Registered name<input className="input" autoFocus value={f.name} onChange={e => setF({ ...f, name: e.target.value })} placeholder="As on the GST certificate" /></label>
-        <label className="label" style={{ gridColumn: '1/-1' }}>GSTIN<input className="input mono" value={g} maxLength={15} onChange={e => { setF({ ...f, gstin: e.target.value.toUpperCase().replace(/\s/g, '') }); setErr(''); }} placeholder="15 characters" />
+        <label style={{ gridColumn: '1/-1', display: 'flex', alignItems: 'center', gap: 10, fontSize: 14, cursor: 'pointer' }}><input type="checkbox" checked={!f.gst} onChange={e => { setF({ ...f, gst: !e.target.checked }); setErr(''); }} style={{ width: 18, height: 18, accentColor: '#0052ff' }} />Not registered for GST <span style={{ color: '#64748b' }}>— its documents carry no tax</span></label>
+        {f.gst ? <label className="label" style={{ gridColumn: '1/-1' }}>GSTIN<input className="input mono" value={g} maxLength={15} onChange={e => { setF({ ...f, gstin: e.target.value.toUpperCase().replace(/\s/g, '') }); setErr(''); }} placeholder="15 characters" />
           <span className="hint" style={{ color: g.length === 15 ? (st ? '#047857' : '#be123c') : undefined }}>{hint}</span></label>
+          : <label className="label" style={{ gridColumn: '1/-1' }}>State<select className="select" value={f.state} onChange={e => { setF({ ...f, state: e.target.value }); setErr(''); }}><option value="">Pick a state…</option>{Object.entries(STATE_CODES).sort((a, b) => a[1].localeCompare(b[1])).map(([c, n]) => <option key={c} value={c}>{n}</option>)}</select></label>}
         <label className="label" style={{ gridColumn: '1/-1' }}>Registered address<textarea className="input" rows={2} value={f.address} onChange={e => setF({ ...f, address: e.target.value })} placeholder="Prints on every invoice it issues" style={{ height: 'auto', padding: '10px 12px' }} /></label>
         <label className="label">Bank account<input className="input" value={f.bank} onChange={e => setF({ ...f, bank: e.target.value })} /></label>
         <label className="label">UPI ID<input className="input" value={f.upi} onChange={e => setF({ ...f, upi: e.target.value })} /></label>

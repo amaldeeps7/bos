@@ -1,7 +1,7 @@
 'use client';
 import { Fragment, ReactNode, useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { INVOICE_STATUS, QUOTE_STATUS, UNISSUED, Calc, Line, calc, diffDays, fmtD, gstText, inr, stateOf } from '@bos/shared';
+import { INVOICE_STATUS, QUOTE_STATUS, UNISSUED, Calc, Line, calc, diffDays, fmtD, gstText, inr } from '@bos/shared';
 import { useAct, useApp, useQ } from '@/lib/app';
 import { api, ApiError } from '@/lib/api';
 import { editorStore } from '@/lib/editor-store';
@@ -29,11 +29,14 @@ export function InvoiceRowCompact({ i }: { i: Invoice }) {
 }
 
 function totalsRows(k: Calc) {
-  const rows: [string, string, boolean?][] = [['Subtotal', inr(k.sub)], ...(k.disc ? [['Discount', '−' + inr(k.disc)] as [string, string]] : []), ['Taxable value', inr(k.taxable)], ...k.taxRows.map(([l, v]) => [l, inr(v), true] as [string, string, boolean])];
+  const rows: [string, string, boolean?][] = [['Subtotal', inr(k.sub)], ...(k.disc ? [['Discount', '−' + inr(k.disc)] as [string, string]] : []), ...(k.gst ? [['Taxable value', inr(k.taxable)] as [string, string]] : []), ...k.taxRows.map(([l, v]) => [l, inr(v), true] as [string, string, boolean])];
   return rows.map(([label, value, muted]) => <div key={label} style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', fontSize: 14, color: muted ? '#64748b' : '#0f172a' }}><span>{label}</span><span>{value}</span></div>);
 }
 const kindStyle = (c: string) => ({ margin: 0, fontSize: 13, fontWeight: 600, letterSpacing: '.06em', textTransform: 'uppercase' as const, color: c });
 const DCOLS = 'minmax(220px,2.4fr) 76px 90px 110px 60px 120px 110px 120px';
+const DCOLS_PLAIN = 'minmax(220px,2.4fr) 90px 110px 60px 120px'; // no SAC or GST columns
+/** Without GST it isn't a "Tax invoice", just an "Invoice". */
+const plainTitle = (t: string, gst: boolean) => (gst ? t : t.replace(/^tax\s+invoice/i, 'Invoice'));
 
 type Act = { label: string; icon: string; kind: 'pri' | 'sec' | 'demo'; go: () => void };
 
@@ -53,7 +56,8 @@ export function DocView({ kind, id }: { kind: 'quote' | 'invoice'; id: string })
   const doc = kind === 'quote' ? quotes?.find(q => q.id === id) : invoices?.find(i => i.id === id);
   if (!doc) return <p style={{ color: '#64748b' }}>Loading…</p>;
   const c = customers.find(x => x.id === doc.customerId); const k = doc.calc;
-  const tpl = me.org.templates?.[kind] || { title: kind === 'quote' ? 'Quotation' : 'Tax invoice', accent: '#0052ff' };
+  const tpl0 = me.org.templates?.[kind] || { title: kind === 'quote' ? 'Quotation' : 'Tax invoice', accent: '#0052ff' };
+  const tpl = { ...tpl0, title: plainTitle(tpl0.title, k.gst) }; const total = k.gst ? 'Total incl. GST' : 'Total';
   // The entity that issued this document (its GSTIN and bank details print on it).
   const le = me.entities.find(e => e.id === doc.entityId) || me.org.entity;
   const A: Act[] = []; const add = (label: string, icon: string, kind_: Act['kind'], go: () => void) => A.push({ label, icon, kind: kind_, go });
@@ -89,7 +93,7 @@ export function DocView({ kind, id }: { kind: 'quote' | 'invoice'; id: string })
         actions: p ? [{ label: 'Open project', icon: 'icon-arrow-right', kind: 'sec', go: () => router.push(`/projects/${p.id}`) }] : i ? [{ label: 'Open invoice', icon: 'icon-arrow-right', kind: 'sec', go: () => router.push(`/invoices/${i.id}`) }] : [] }; }
     if (q.status === 'DECLINED') banner = { tone: 'danger', icon: 'icon-circle-x', title: 'The customer declined.', text: 'Revise and resend, or leave it closed.' };
     const expired = diffDays(q.validUntil, today) < 0 && !['CONVERTED', 'DECLINED'].includes(q.status);
-    metrics = <><Metric label="Total incl. GST" value={inr(k.grand)} /><Metric label="Taxable value" value={inr(k.taxable)} /><Metric label="Discount given" value={k.disc ? inr(k.disc) : '—'} /><Metric label="Valid until" value={fmtD(q.validUntil)} danger={expired} /></>;
+    metrics = <><Metric label={total} value={inr(k.grand)} />{k.gst ? <Metric label="Taxable value" value={inr(k.taxable)} /> : <Metric label="Subtotal" value={inr(k.sub)} />}<Metric label="Discount given" value={k.disc ? inr(k.disc) : '—'} /><Metric label="Valid until" value={fmtD(q.validUntil)} danger={expired} /></>;
     meta = [['Quotation no.', q.no], ['Date', fmtD(q.date)], ['Valid until', fmtD(q.validUntil)], ['Prepared by', person(q.byId).name]];
     sub = `${q.title} for ${c?.name || ''}`;
     badge = <>{<Status def={QUOTE_STATUS[q.status]} />}{q.ver > 1 && <span style={{ fontSize: 14, color: '#64748b' }}>Version {q.ver}</span>}</>;
@@ -113,7 +117,7 @@ export function DocView({ kind, id }: { kind: 'quote' | 'invoice'; id: string })
     if (i.overdue) banner = { tone: 'danger', icon: 'icon-circle-alert', title: `Overdue by ${-diffDays(i.due, today)} days.`, text: `${inr(i.bal)} outstanding. Billing contact: ${c?.contact}, ${c?.email}.`, actions: [remind] };
     const mine_ = payments.filter(r => r.allocations.some(a => a.invoiceId === i.id));
     if (i.status === 'PAID') { const last = mine_[0]; banner = { tone: 'success', icon: 'icon-circle-check', title: 'Paid in full.', text: last ? `Last receipt ${last.no} on ${fmtD(last.date)} by ${last.method}.` : '' }; }
-    metrics = <><Metric label="Total incl. GST" value={inr(k.grand)} /><Metric label="Received" value={inr(i.paid)} />{i.credited > 0 && <Metric label="Credited" value={inr(i.credited)} />}<Metric label="Balance due" value={inr(i.bal)} danger={i.overdue} /><Metric label="Due" value={fmtD(i.due)} danger={i.overdue} /></>;
+    metrics = <><Metric label={total} value={inr(k.grand)} /><Metric label="Received" value={inr(i.paid)} />{i.credited > 0 && <Metric label="Credited" value={inr(i.credited)} />}<Metric label="Balance due" value={inr(i.bal)} danger={i.overdue} /><Metric label="Due" value={fmtD(i.due)} danger={i.overdue} /></>;
     meta = [['Invoice no.', i.no], ['Invoice date', fmtD(i.date)], ['Due date', fmtD(i.due)], ['Terms', `Net ${diffDays(i.due, i.date)}`]];
     sub = `${i.title} · ${c?.name || ''}`;
     badge = <Status def={INVOICE_STATUS[i.displayStatus]} />;
@@ -141,19 +145,19 @@ export function DocView({ kind, id }: { kind: 'quote' | 'invoice'; id: string })
     <Card>
       <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'baseline', gap: '8px 16px', padding: '20px 28px 0' }}>
         <p style={kindStyle(tpl.accent)}>{tpl.title}</p>
-        <p style={{ margin: 0, fontSize: 13, color: '#64748b' }}>{k.intra ? 'Intra-state supply · CGST + SGST' : `Inter-state supply to ${c?.state} · IGST`}</p>
+        {k.gst && <p style={{ margin: 0, fontSize: 13, color: '#64748b' }}>{k.intra ? 'Intra-state supply · CGST + SGST' : `Inter-state supply to ${c?.state} · IGST`}</p>}
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(200px,1fr))', gap: '20px 28px', padding: '16px 28px 22px', borderBottom: '1px solid #e2e8f0' }}>
         <div style={{ minWidth: 0 }}>
           <p style={{ margin: '0 0 4px', fontSize: 13, color: '#64748b' }}>From</p>
           <p style={{ margin: 0, fontSize: 15, fontWeight: 600 }}>{le?.name}</p>
-          <p style={{ margin: '2px 0 0', fontSize: 13, color: '#475569' }}>GSTIN <span className="mono">{le?.gstin}</span></p>
+          {k.gst && le?.gstin && <p style={{ margin: '2px 0 0', fontSize: 13, color: '#475569' }}>GSTIN <span className="mono">{le.gstin}</span></p>}
           <p style={{ margin: 0, fontSize: 13, color: '#475569' }}>{le?.address}</p>
         </div>
         <div style={{ minWidth: 0 }}>
           <p style={{ margin: '0 0 4px', fontSize: 13, color: '#64748b' }}>Bill to</p>
           <p style={{ margin: 0, fontSize: 15, fontWeight: 600 }}>{c?.name}</p>
-          <p style={{ margin: '2px 0 0', fontSize: 13, color: '#475569' }}>GSTIN <span className="mono">{c?.gstin}</span></p>
+          {k.gst && c?.gstin && <p style={{ margin: '2px 0 0', fontSize: 13, color: '#475569' }}>GSTIN <span className="mono">{c.gstin}</span></p>}
           <p style={{ margin: 0, fontSize: 13, color: '#475569' }}>{c?.city}, {c?.state}</p>
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '4px 16px', alignContent: 'start', fontSize: 13 }}>
@@ -161,13 +165,13 @@ export function DocView({ kind, id }: { kind: 'quote' | 'invoice'; id: string })
         </div>
       </div>
       <div style={{ overflowX: 'auto' }}>
-        <div style={{ minWidth: 900 }}>
-          <div className="grid-head" style={{ display: 'grid', gridTemplateColumns: DCOLS, gap: 12, padding: '10px 28px' }}><span>Description</span><span>SAC</span><span style={{ textAlign: 'right' }}>Qty</span><span style={{ textAlign: 'right' }}>Rate</span><span style={{ textAlign: 'right' }}>Disc.</span><span style={{ textAlign: 'right' }}>Taxable</span><span style={{ textAlign: 'right' }}>GST</span><span style={{ textAlign: 'right' }}>Total</span></div>
+        <div style={{ minWidth: k.gst ? 900 : 600 }}>
+          <div className="grid-head" style={{ display: 'grid', gridTemplateColumns: k.gst ? DCOLS : DCOLS_PLAIN, gap: 12, padding: '10px 28px' }}><span>Description</span>{k.gst && <span>SAC</span>}<span style={{ textAlign: 'right' }}>Qty</span><span style={{ textAlign: 'right' }}>Rate</span><span style={{ textAlign: 'right' }}>Disc.</span>{k.gst && <><span style={{ textAlign: 'right' }}>Taxable</span><span style={{ textAlign: 'right' }}>GST</span></>}<span style={{ textAlign: 'right' }}>{k.gst ? 'Total' : 'Amount'}</span></div>
           {k.rows.map((r, i) => (
-            <div key={i} className="num" style={{ display: 'grid', gridTemplateColumns: DCOLS, gap: 12, alignItems: 'baseline', padding: '12px 28px', borderBottom: '1px solid #f1f5f9', fontSize: 14 }}>
-              <span style={{ fontWeight: 500 }}>{r.d}</span><span className="mono" style={{ fontSize: 12.5, color: '#64748b' }}>{r.sac}</span>
+            <div key={i} className="num" style={{ display: 'grid', gridTemplateColumns: k.gst ? DCOLS : DCOLS_PLAIN, gap: 12, alignItems: 'baseline', padding: '12px 28px', borderBottom: '1px solid #f1f5f9', fontSize: 14 }}>
+              <span style={{ fontWeight: 500 }}>{r.d}</span>{k.gst && <span className="mono" style={{ fontSize: 12.5, color: '#64748b' }}>{r.sac}</span>}
               <span style={{ textAlign: 'right' }}>{r.qty} {r.unit}</span><span style={{ textAlign: 'right' }}>{inr(r.rate)}</span><span style={{ textAlign: 'right', color: '#64748b' }}>{+r.disc ? r.disc + '%' : '—'}</span>
-              <span style={{ textAlign: 'right' }}>{inr(r.taxable)}</span><span style={{ textAlign: 'right', color: '#64748b' }}>{inr(r.tax)}</span><span style={{ textAlign: 'right', fontWeight: 500 }}>{inr(r.total)}</span>
+              {k.gst && <><span style={{ textAlign: 'right' }}>{inr(r.taxable)}</span><span style={{ textAlign: 'right', color: '#64748b' }}>{inr(r.tax)}</span></>}<span style={{ textAlign: 'right', fontWeight: 500 }}>{inr(r.total)}</span>
             </div>
           ))}
         </div>
@@ -185,6 +189,7 @@ export function DocView({ kind, id }: { kind: 'quote' | 'invoice'; id: string })
 }
 
 const ECOLS = 'minmax(220px,2.4fr) 90px 70px 84px 110px 70px 120px 36px';
+const ECOLS_PLAIN = 'minmax(220px,2.4fr) 70px 84px 110px 70px 120px 36px';
 const blankLine = (): Line => ({ d: '', qty: 1, unit: 'day', rate: 0, disc: 0, sac: '998314' });
 
 /** Builder for quotations and invoices: catalogue lines, discounts, live GST and the approval-policy check. */
@@ -204,9 +209,9 @@ export function DocEditor({ kind, id }: { kind: 'quote' | 'invoice'; id?: string
       days: doc ? diffDays(isQ ? (doc as Quote).validUntil : (doc as Invoice).due, doc.date) : isQ ? 30 : c.terms });
   }, [customers, doc, id, ed, isQ, params]);
   const ec = customers.find(x => x.id === ed?.cust);
-  // GST follows the issuing entity's state: same state as the customer → CGST + SGST, otherwise IGST.
+  // GST follows the issuing entity: same state as the customer → CGST + SGST, otherwise IGST; none if it isn't registered.
   const ent = me.entities.find(e => e.id === ed?.entity);
-  const k = useMemo(() => ed ? calc(ed.lines, ec?.state, (ent && stateOf(ent.gstin)) || me.org.ourState, me.org.sacRates) : null, [ed, ec, ent, me.org]);
+  const k = useMemo(() => ed ? calc(ed.lines, ec?.state, ent?.state || me.org.ourState, me.org.sacRates, ent ? ent.gst : true) : null, [ed, ec, ent, me.org]);
   useEffect(() => { editorStore.lines = ed?.lines || []; return () => { editorStore.lines = []; }; }, [ed]);
   if (!ed || !k) return <p style={{ color: '#64748b' }}>Loading…</p>;
   const limit = me.org.discLimit; const revise = !!doc && doc.status !== 'DRAFT';
@@ -229,19 +234,19 @@ export function DocEditor({ kind, id }: { kind: 'quote' | 'invoice'; id?: string
       <label className="label">Customer<select className="select" value={ed.cust} onChange={e => { const nc = customers.find(x => x.id === e.target.value)!; setEd({ ...ed, cust: nc.id, days: isQ ? ed.days : nc.terms }); }}>{customers.map(x => <option key={x.id} value={x.id}>{x.name}</option>)}</select></label>
       <label className="label">{isQ ? 'Quotation title' : 'Invoice title'}<input className="input" value={ed.title} onChange={e => setEd({ ...ed, title: e.target.value })} placeholder="e.g. Parent app — phase 1" /></label>
       <label className="label">{isQ ? 'Valid for' : 'Payment terms'}<select className="select" value={String(ed.days)} onChange={e => setEd({ ...ed, days: +e.target.value })}>{opts.map(n => <option key={n} value={String(n)}>{isQ ? `${n} days` : `Net ${n}`}</option>)}</select></label>
-      {me.entities.length > 1 && <label className="label">Issued by<select className="select" value={ed.entity} onChange={e => setEd({ ...ed, entity: e.target.value })}>{me.entities.map(le => <option key={le.id} value={le.id}>{le.name} · {stateOf(le.gstin) || le.gstin.slice(0, 2)}</option>)}</select></label>}
-      <div className="label">Place of supply<span className="ellipsis" style={{ height: 42, display: 'flex', alignItems: 'center', padding: '0 12px', borderRadius: 8, background: '#f8fafc', border: '1px solid #e2e8f0', fontWeight: 400, color: '#334155' }}>{ec?.state} — {gstText(k.intra)}</span></div>
+      {me.entities.length > 1 && <label className="label">Issued by<select className="select" value={ed.entity} onChange={e => setEd({ ...ed, entity: e.target.value })}>{me.entities.map(le => <option key={le.id} value={le.id}>{le.name} · {le.state}{le.gst ? '' : ' · no GST'}</option>)}</select></label>}
+      {k.gst && <div className="label">Place of supply<span className="ellipsis" style={{ height: 42, display: 'flex', alignItems: 'center', padding: '0 12px', borderRadius: 8, background: '#f8fafc', border: '1px solid #e2e8f0', fontWeight: 400, color: '#334155' }}>{ec?.state} — {gstText(k.intra)}</span></div>}
     </Card>
     <Card>
-      <CardHead title="Lines" sub="Pick from the catalogue or type your own. GST is calculated per line." />
+      <CardHead title="Lines" sub={k.gst ? 'Pick from the catalogue or type your own. GST is calculated per line.' : `Pick from the catalogue or type your own. ${ent?.name || 'This entity'} isn’t registered for GST, so no tax is added.`} />
       <div style={{ overflowX: 'auto' }}>
-        <div style={{ minWidth: 880 }}>
-          <div className="grid-head" style={{ display: 'grid', gridTemplateColumns: ECOLS, gap: 10 }}><span>Description</span><span>SAC</span><span style={{ textAlign: 'right' }}>Qty</span><span>Unit</span><span style={{ textAlign: 'right' }}>Rate (₹)</span><span style={{ textAlign: 'right' }}>Disc. %</span><span style={{ textAlign: 'right' }}>Amount</span><span /></div>
+        <div style={{ minWidth: k.gst ? 880 : 790 }}>
+          <div className="grid-head" style={{ display: 'grid', gridTemplateColumns: k.gst ? ECOLS : ECOLS_PLAIN, gap: 10 }}><span>Description</span>{k.gst && <span>SAC</span>}<span style={{ textAlign: 'right' }}>Qty</span><span>Unit</span><span style={{ textAlign: 'right' }}>Rate (₹)</span><span style={{ textAlign: 'right' }}>Disc. %</span><span style={{ textAlign: 'right' }}>Amount</span><span /></div>
           {ed.lines.map((l, i) => { const over = (+l.disc || 0) > limit;
             return (
-              <div key={i} style={{ display: 'grid', gridTemplateColumns: ECOLS, gap: 10, alignItems: 'center', padding: '8px 20px', borderBottom: '1px solid #f1f5f9' }}>
+              <div key={i} style={{ display: 'grid', gridTemplateColumns: k.gst ? ECOLS : ECOLS_PLAIN, gap: 10, alignItems: 'center', padding: '8px 20px', borderBottom: '1px solid #f1f5f9' }}>
                 <input value={l.d} onChange={e => setLine(i, 'd', e.target.value)} placeholder="What are you charging for?" style={{ ...inp, padding: '0 10px' }} />
-                <input value={l.sac} onChange={e => setLine(i, 'sac', e.target.value)} className="mono" style={{ ...inp, fontSize: 13 }} />
+                {k.gst && <input value={l.sac} onChange={e => setLine(i, 'sac', e.target.value)} className="mono" style={{ ...inp, fontSize: 13 }} />}
                 <input value={String(l.qty)} onChange={e => setLine(i, 'qty', e.target.value)} inputMode="decimal" style={right} />
                 <input value={l.unit} onChange={e => setLine(i, 'unit', e.target.value)} style={inp} />
                 <input value={String(l.rate)} onChange={e => setLine(i, 'rate', e.target.value)} inputMode="decimal" style={right} />

@@ -4,6 +4,13 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from './prisma.service';
 import { orgId } from './tenant';
 
+/**
+ * A draft invoice's temporary reference. The real number is taken when it is issued, so cancelled
+ * drafts never leave gaps in the GST invoice series.
+ */
+export const draftRef = () => 'DRAFT-' + Array.from({ length: 6 }, () => 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'[Math.floor(Math.random() * 31)]).join('');
+export const isDraftRef = (no: string) => no.startsWith('DRAFT-');
+
 /** Invoices, credit notes and receipts are numbered per issuing entity (one series per GSTIN). */
 export const PER_ENTITY = new Set(['INVOICE', 'CREDIT_NOTE', 'RECEIPT']);
 const LABELS: Record<string, string> = { INVOICE: 'Invoices', CREDIT_NOTE: 'Credit notes', RECEIPT: 'Receipts', QUOTATION: 'Quotations', PROJECT: 'Projects' };

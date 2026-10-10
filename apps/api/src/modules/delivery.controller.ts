@@ -1,8 +1,10 @@
 import { BadRequestException, Body, Controller, Delete, Get, HttpCode, NotFoundException, Param, Patch, Post } from '@nestjs/common';
+import { OrgService } from '../core/org.service';
+import { inr } from '@bos/shared';
 import { PrismaService } from '../core/prisma.service';
 import { AccessService } from '../core/access.service';
 import { AuditService } from '../core/audit.service';
-import { NumberingService } from '../core/numbering.service';
+import { NumberingService, draftRef } from '../core/numbering.service';
 import { Me, Perm } from '../core/decorators';
 import type { AuthUser } from '../core/auth.types';
 import { d, num, oneOf, str, toDate } from '../core/util';
@@ -11,7 +13,7 @@ import { orgId } from '../core/tenant';
 
 @Controller('projects')
 export class ProjectsController {
-  constructor(private prisma: PrismaService, private fin: FinanceService, private audit: AuditService, private numbering: NumberingService) {}
+  constructor(private prisma: PrismaService, private fin: FinanceService, private audit: AuditService, private numbering: NumberingService, private orgs: OrgService) {}
 
   @Get() @Perm('project.read')
   async list() {
@@ -129,11 +131,11 @@ export class ProjectsController {
     const m = await this.prisma.milestone.findFirst({ where: { id: mid, projectId: id } });
     if (!p || !m) throw new NotFoundException();
     if (m.status !== 'COMPLETED') throw new BadRequestException('Complete the milestone before billing it');
-    const { today } = await this.fin.ctx();
+    const { today } = await this.fin.ctx(); const { gst } = await this.orgs.entity(p.entityId);
     const inv = await this.prisma.$transaction(async tx => {
-      const no = await this.numbering.next('INVOICE', { entityId: p.entityId }, tx);
+      const no = draftRef();
       await tx.milestone.update({ where: { id: mid }, data: { status: 'INVOICED', changedAt: new Date() } });
-      return tx.invoice.create({ data: { no, entityId: p.entityId, customerId: p.customerId, title: `${p.name} — ${m.name}`, projectId: p.id, milestoneId: m.id, date: toDate(today),
+      return tx.invoice.create({ data: { no, entityId: p.entityId, gst, customerId: p.customerId, title: `${p.name} — ${m.name}`, projectId: p.id, milestoneId: m.id, date: toDate(today),
         due: new Date(toDate(today).getTime() + p.customer.terms * 86400000), status: 'DRAFT', byId: me.id,
         lines: [{ d: `${p.name} — ${m.name} (${m.pct}%)`, qty: 1, unit: 'milestone', rate: m.value, disc: 0, sac: '998314' }] } });
     });
@@ -163,7 +165,7 @@ export class ProjectsController {
 
 @Controller('assets')
 export class AssetsController {
-  constructor(private prisma: PrismaService, private audit: AuditService) {}
+  constructor(private prisma: PrismaService, private audit: AuditService, private fin: FinanceService) {}
 
   @Get() @Perm('asset.read')
   async list() {
@@ -201,6 +203,34 @@ export class AssetsController {
     return { message: `${data.name || a.name} saved.` };
   }
 
+  /** Asset policy: assignments above this value need a second approver (Settings → Approval rules). */
+  private async limit() { return Number((await this.fin.ctx()).policy.assetMax) || Infinity; }
+
+  /** Routes an assignment for approval: to someone (not the requester) who can assign, or who manages equipment above the limit. */
+  private async route(me: AuthUser, a: { id: string; code: string; name: string; value: number }, holderId: string, projectId: string | null, note: string) {
+    const limit = await this.limit(); const over = a.value > limit;
+    const approver = await this.fin.approverFor(over ? 'asset.manage' : 'asset.assign', me.id);
+    if (!approver) throw new BadRequestException('Nobody else can approve equipment. Grant asset.manage to another role.');
+    const holder = await this.prisma.membership.findUnique({ where: { id: holderId } });
+    const project = projectId ? await this.prisma.project.findUnique({ where: { id: projectId } }) : null;
+    await this.prisma.$transaction(tx => this.fin.requestApproval(tx, {
+      kind: 'Asset request', ref: a.code, title: `${a.name} for ${project ? project.name : holder?.name || 'someone'}`,
+      detail: note || (over ? `Worth ${inr(a.value)}, above the ${inr(limit)} limit, so a second person approves.` : 'Assigned when approved; returned to the pool when the work ends.'),
+      amount: a.value, payload: { assetCode: a.code, assetId: a.id, projectId, holderId }, requestedBy: me, approverId: approver.id,
+    }));
+    await this.audit.log(me, `Requested ${a.name} (${a.code})`, 'icon-laptop', 'settings');
+    return { message: `Request sent to ${approver.name} for approval.` };
+  }
+
+  /** Anyone who can see equipment can ask for an available item, for themselves or a project. */
+  @Post(':id/request') @HttpCode(200) @Perm('asset.read')
+  async request(@Me() me: AuthUser, @Param('id') id: string, @Body() b: any) {
+    const a = await this.prisma.asset.findUnique({ where: { id } }); if (!a) throw new NotFoundException();
+    if (a.status !== 'AVAILABLE') throw new BadRequestException('That item isn’t available right now.');
+    if (await this.prisma.approval.findFirst({ where: { kind: 'Asset request', ref: a.code, status: 'PENDING' } })) throw new BadRequestException('Someone has already asked for this item.');
+    return this.route(me, a, String(b.holderId || me.id), b.projectId ? String(b.projectId) : null, str(b.note, 'Note', { max: 300 }).trim());
+  }
+
   @Post(':id/:action') @HttpCode(200) @Perm('asset.assign')
   async act(@Me() me: AuthUser, @Param('id') id: string, @Param('action') action: string, @Body() b: any) {
     const a = await this.prisma.asset.findUnique({ where: { id } });
@@ -214,6 +244,8 @@ export class AssetsController {
     if (action === 'assign') {
       if (a.status !== 'AVAILABLE') throw new BadRequestException('Not available');
       const holderId = b.holderId || me.id;
+      // Above the policy limit, assigning needs a second person, unless you manage equipment yourself.
+      if (a.value > (await this.limit()) && !AccessService.has(me, 'asset.manage')) return this.route(me, a, holderId, b.projectId || null, '');
       await this.prisma.asset.update({ where: { id }, data: { status: 'IN_USE', holderId, projectId: b.projectId || null } });
       await this.audit.log(me, `${a.name} (${a.code}) assigned`, 'icon-laptop', 'settings');
       return { message: holderId === me.id ? `${a.name} assigned to you.` : `${a.name} assigned.` };

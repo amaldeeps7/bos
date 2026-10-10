@@ -7,6 +7,7 @@ import type { Meeting, Project } from '@/lib/types';
 import { Avatar, Badge, Btn, Card, Icon, PageHead, Tabs } from '@/components/ui';
 import { meetDraftOf, useOpenNewMeeting } from '@/components/dialogs';
 import { openLink } from '@/components/overlays';
+import { ExportBtn } from '@/components/export-btn';
 
 type Tab = 'upcoming' | 'past' | 'follow';
 const LOC_ICON: Record<string, string> = { 'Google Meet': 'icon-video', Zoom: 'icon-video', 'Microsoft Teams': 'icon-video', 'Customer site': 'icon-map-pin' };
@@ -26,7 +27,9 @@ export default function Meetings() {
   const cancel = async (m: Meeting) => { if (!confirm(`Cancel “${m.title}”? Attendees will be notified.`)) return; const r = await act(`meetings/${m.id}`, undefined, { method: 'DELETE', quiet: true }); if (r) toast(`“${m.title}” cancelled. Attendees notified.`); };
   const edit = (m: Meeting) => setUi({ meetDialog: meetDraftOf(m) });
   return <>
-    <PageHead title="Meetings" sub={`${meetings.filter(m => !past(m)).length} upcoming · ${meetings.filter(defs.follow).length} need follow-up`} right={<Btn kind="pri" icon="plus" onClick={() => newMeeting()}>New meeting</Btn>} />
+    <PageHead title="Meetings" sub={`${meetings.filter(m => !past(m)).length} upcoming · ${meetings.filter(defs.follow).length} need follow-up`} right={<div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+      <ExportBtn name="meetings" rows={() => list.map(m => ({ Title: m.title, Date: m.date, Start: hm(m.start), Minutes: Math.round(m.dur * 60), Project: projects.find(p => p.id === m.projectId)?.name || '', Organiser: person(m.organizerId).name, Attendees: m.attendees.map(a => person(a).name).concat(m.guests).join('; '), Location: m.loc || m.link, 'Open actions': m.actions.filter(a => !a.taskId).length }))} />
+      <Btn kind="pri" icon="plus" onClick={() => newMeeting()}>New meeting</Btn></div>} />
     <Tabs tabs={([['upcoming', 'Upcoming'], ['past', 'Past'], ['follow', 'Needs follow-up']] as [Tab, string][]).map(([id, label]) => ({ id, label, count: meetings.filter(defs[id]).length }))} value={tab} onChange={setTab} />
     <Card style={{ overflow: 'hidden' }}>
       {days.map(d => {

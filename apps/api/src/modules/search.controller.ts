@@ -26,7 +26,7 @@ export class SearchController {
     const add = (type: string, label: string, fn: () => Promise<Hit[]>) => jobs.push(fn().then(hits => ({ type, label, hits })));
 
     if (has('customer.read')) add('customer', 'Customers', async () => (await this.prisma.customer.findMany({ where: { archived: false, OR: [{ name: I(q) }, { gstin: I(q) }, { city: I(q) }, { contact: I(q) }, { email: I(q) }] }, take }))
-      .map(c => ({ type: 'customer', id: c.id, title: c.name, sub: `${c.gstin} · ${c.city}`, href: `/customers/${c.id}` })));
+      .map(c => ({ type: 'customer', id: c.id, title: c.name, sub: `${c.gstin || 'No GSTIN'} · ${c.city}`, href: `/customers/${c.id}` })));
     if (has('project.read')) add('project', 'Projects', async () => (await this.prisma.project.findMany({ where: { OR: [{ name: I(q) }, { code: I(q) }, { unit: { name: I(q) } }, { customer: { name: I(q) } }] }, include: { customer: true }, take }))
       .map(p => ({ type: 'project', id: p.id, title: p.name, sub: `${p.code} · ${p.customer.name} · ${p.health}`, href: `/projects/${p.id}` })));
     if (has('task.read')) add('task', 'Tasks', async () => {

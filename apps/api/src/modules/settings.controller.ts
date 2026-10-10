@@ -1,15 +1,16 @@
 import { BadRequestException, Body, Controller, Delete, ForbiddenException, Get, HttpCode, NotFoundException, Param, Patch, Post } from '@nestjs/common';
-import { ALL_PERMS, MODULES, PERM_GROUPS, formatNumber, isValidGstin, relTime, stateOf } from '@bos/shared';
+import { ALL_PERMS, MODULES, PERM_GROUPS, UNISSUED, formatNumber, placeOf, relTime } from '@bos/shared';
 import { PrismaService } from '../core/prisma.service';
 import { AccessService } from '../core/access.service';
 import { AuditService } from '../core/audit.service';
 import { OrgService } from '../core/org.service';
 import { Me, Perm } from '../core/decorators';
 import type { AuthUser } from '../core/auth.types';
-import { num, oneOf, str } from '../core/util';
+import { gstParty, num, oneOf, str } from '../core/util';
 import { MailService, fill, htmlOf } from '../core/mail.service';
 import { orgId, Scope } from '../core/tenant';
 import { MembersService } from '../core/members.service';
+import { FinanceService } from './finance.service';
 import { planAllows, planOf } from '../core/plans';
 
 /** Stored scope → the Access to select's value: all | le:<id> | bu:<id>. */
@@ -25,7 +26,7 @@ const lastActive = (x: Date | null) => (!x ? '—' : Date.now() - x.getTime() < 
 
 @Controller('settings')
 export class SettingsController {
-  constructor(private prisma: PrismaService, private access: AccessService, private audit: AuditService, private orgs: OrgService, private mail: MailService, private members: MembersService) {}
+  constructor(private prisma: PrismaService, private access: AccessService, private audit: AuditService, private orgs: OrgService, private mail: MailService, private members: MembersService, private fin: FinanceService) {}
 
   private async org() { return this.prisma.organization.findUniqueOrThrow({ where: { id: orgId() } }); }
   private async patchJson(field: 'security' | 'policy' | 'taxOpts' | 'reminders' | 'templates' | 'modules', patch: Record<string, unknown>) {
@@ -49,13 +50,13 @@ export class SettingsController {
       org: { name: org.name, slug: org.slug, currency: org.currency, tz: org.tz, country: org.country, fy: org.fyStart, dateFmt: org.dateFmt, createdAt: org.createdAt.toISOString(), status: 'Active' },
       modules: MODULES.map(m => ({ ...m, on: (org.modules as any)[m.id] !== false })),
       security: org.security, policy: org.policy, taxOpts: org.taxOpts, reminders: org.reminders, templates: org.templates,
-      entities: entities.map(e => ({ ...e, state: stateOf(e.gstin) || 'Unrecognised code' })),
+      entities: entities.map(e => ({ ...e, stateCode: e.state, state: placeOf(e) || 'Unrecognised code' })),
       units: units.map(u => ({ id: u.id, name: u.name, code: u.code, entity: u.entity.name, entityId: u.entityId, headId: u.headId, head: u.head?.name || 'Not set', projects: projects.filter(p => p.unitId === u.id).length })),
       users: users.map(u => ({ id: u.id, name: u.name, email: u.email, title: u.title, role: u.role.name, scope: scopeKey(u.scope, u.role.builtIn), status: u.status, last: u.status === 'Invited' ? '—' : lastActive(u.lastActiveAt) })),
       roles: roles.map(r => ({ id: r.id, name: r.name, desc: r.desc, builtIn: r.builtIn, perms: r.builtIn ? ALL_PERMS : r.perms })),
       // One row per type and issuing entity, in the design's order.
       series: ['INVOICE', 'QUOTATION', 'CREDIT_NOTE', 'RECEIPT', 'PROJECT'].flatMap(t => series.filter(s => s.type === t).sort((a, b) => entityOrder(a.entityId) - entityOrder(b.entityId)))
-        .map(s => { const e = entities.find(x => x.id === s.entityId); return { ...s, entity: e ? `${e.name} · GSTIN ${e.gstin.slice(0, 2)}` : 'All entities', sample: formatNumber(s, today, org.fyStart) }; }),
+        .map(s => { const e = entities.find(x => x.id === s.entityId); return { ...s, entity: e ? `${e.name} · ${e.gst ? `GSTIN ${e.gstin.slice(0, 2)}` : placeOf(e)}` : 'All entities', sample: formatNumber(s, today, org.fyStart) }; }),
       sac: sac.map(x => ({ ...x, used: catalog.filter(c => c.sac === x.code).length })),
     };
   }
@@ -80,10 +81,25 @@ export class SettingsController {
   async entity(@Me() me: AuthUser, @Param('id') id: string, @Body() b: any) {
     const data: any = {};
     for (const f of ['name', 'address', 'bank', 'upi', 'cin'] as const) if (b[f] !== undefined) data[f] = str(b[f], f, { max: 300 }).trim();
-    if (b.gstin !== undefined) { data.gstin = String(b.gstin).toUpperCase().trim(); if (!isValidGstin(data.gstin)) throw new BadRequestException('Enter a valid 15-character GSTIN.'); }
-    if (b.pan !== undefined) { data.pan = String(b.pan).toUpperCase().trim(); if (!/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(data.pan)) throw new BadRequestException('Enter a valid 10-character PAN.'); }
-    const e = await this.prisma.legalEntity.update({ where: { id }, data });
-    await this.audit.log(me, `Updated legal entity ${e.name}`, 'icon-landmark');
+    const cur = await this.prisma.legalEntity.findUniqueOrThrow({ where: { id } });
+    if (b.gst !== undefined || b.gstin !== undefined || b.state !== undefined) {
+      const gst = b.gst === undefined ? cur.gst : !!b.gst;
+      const g = gstParty({ gstin: gst ? b.gstin ?? cur.gstin : '', state: b.state ?? cur.state }, gst);
+      if (g.gstin && await this.prisma.legalEntity.findFirst({ where: { gstin: g.gstin, id: { not: id } } })) throw new BadRequestException('An entity with this GSTIN already exists.');
+      Object.assign(data, { gst, gstin: g.gstin, state: g.state });
+    }
+    if (b.pan !== undefined) { data.pan = String(b.pan).toUpperCase().trim(); if (data.pan && !/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(data.pan)) throw new BadRequestException('Enter a valid 10-character PAN.'); }
+    const e = await this.prisma.$transaction(async tx => {
+      const e = await tx.legalEntity.update({ where: { id }, data });
+      // Documents not yet issued follow the entity; issued ones keep what they were issued with.
+      if (e.gst !== cur.gst) {
+        await tx.quote.updateMany({ where: { entityId: id, status: { in: ['DRAFT', 'PENDING_APPROVAL', 'APPROVED'] } }, data: { gst: e.gst } });
+        await tx.invoice.updateMany({ where: { entityId: id, status: { in: UNISSUED } }, data: { gst: e.gst } });
+      }
+      return e;
+    });
+    await this.audit.log(me, e.gst !== cur.gst ? `Turned GST ${e.gst ? 'on' : 'off'} for ${e.name}` : `Updated legal entity ${e.name}`, 'icon-landmark');
+    if (e.gst !== cur.gst) return { message: e.gst ? `GST is on for ${e.name}. Drafts now charge GST; issued documents are unchanged.` : `GST is off for ${e.name}. New quotations and invoices carry no tax; issued documents are unchanged.` };
     return { message: `${e.name} saved. Issued documents keep the details they were issued with.` };
   }
 
@@ -94,11 +110,13 @@ export class SettingsController {
     const count = await this.prisma.legalEntity.count();
     if (p.entities && count >= p.entities) throw new ForbiddenException(`The ${p.name} plan includes ${p.entities} legal ${p.entities === 1 ? 'entity' : 'entities'}. Upgrade in Settings → Plan & billing.`);
     const name = str(b.name, 'Registered name', { max: 200 }).trim(); if (!name) throw new BadRequestException('Enter the registered name.');
-    const gstin = str(b.gstin, 'GSTIN', { max: 15 }).trim().toUpperCase(); if (!isValidGstin(gstin)) throw new BadRequestException('Enter a valid 15-character GSTIN.');
-    if (await this.prisma.legalEntity.findFirst({ where: { gstin } })) throw new BadRequestException('An entity with this GSTIN already exists.');
-    const e = await this.prisma.legalEntity.create({ data: { name, gstin, pan: gstin.slice(2, 12), cin: str(b.cin, 'CIN', { max: 30 }).trim(), address: str(b.address, 'Address', { max: 500 }).trim(),
+    const gst = b.gst !== false; const { gstin, state } = gstParty({ gstin: gst ? b.gstin : '', state: b.state }, gst);
+    if (gstin && await this.prisma.legalEntity.findFirst({ where: { gstin } })) throw new BadRequestException('An entity with this GSTIN already exists.');
+    const pan = gstin ? gstin.slice(2, 12) : str(b.pan, 'PAN', { max: 10 }).trim().toUpperCase();
+    if (pan && !/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(pan)) throw new BadRequestException('Enter a valid 10-character PAN.');
+    const e = await this.prisma.legalEntity.create({ data: { name, gst, gstin, state, pan, cin: str(b.cin, 'CIN', { max: 30 }).trim(), address: str(b.address, 'Address', { max: 500 }).trim(),
       bank: str(b.bank, 'Bank', { max: 300 }).trim(), upi: str(b.upi, 'UPI', { max: 100 }).trim(), isDefault: count === 0 } });
-    await this.audit.log(me, `Added legal entity ${name} (${gstin})`, 'icon-landmark');
+    await this.audit.log(me, `Added legal entity ${name}${gstin ? ` (${gstin})` : ' (not registered for GST)'}`, 'icon-landmark');
     return { id: e.id, message: `${name} added. Its invoice, credit note and receipt numbers start at 1.` };
   }
 
@@ -195,6 +213,8 @@ export class SettingsController {
     const status = u.status === 'Active' ? 'Deactivated' : 'Active';
     await this.prisma.membership.update({ where: { id }, data: { status } });
     await this.audit.log(me, `${status === 'Active' ? 'Reactivated' : 'Deactivated'} ${u.name}`, 'icon-user-x', 'access');
+    const moved = status === 'Deactivated' ? await this.fin.reassignApprovals(u.id, u.name) : 0;
+    if (moved) return { message: `${u.name} is signed out everywhere. Their records stay, and ${moved} approval${moved > 1 ? 's' : ''} waiting on them moved to someone else.` };
     return { message: status === 'Active' ? `${u.name} can sign in again.` : `${u.name} is signed out everywhere. Their records stay.` };
   }
 

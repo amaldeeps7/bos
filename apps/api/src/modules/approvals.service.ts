@@ -36,7 +36,10 @@ export class ApprovalsService {
       if (a.docType === 'quote' && a.docId) await tx.quote.update({ where: { id: a.docId }, data: ok ? { status: 'APPROVED', rejected: null } : { status: 'DRAFT', rejected: `Sent back by ${by}.` } });
       const p = (a.payload || {}) as any;
       if (ok && a.kind === 'Milestone date' && p.milestoneId) await tx.milestone.update({ where: { id: p.milestoneId }, data: { due: toDate(p.due), changedAt: new Date() } });
-      if (ok && a.kind === 'Asset request' && p.assetCode) await tx.asset.updateMany({ where: { code: p.assetCode }, data: { status: 'IN_USE', projectId: p.projectId || null, holderId: null } });
+      if (ok && a.kind === 'Asset request' && p.assetCode) {
+        const n = await tx.asset.updateMany({ where: { code: p.assetCode, status: 'AVAILABLE' }, data: { status: 'IN_USE', projectId: p.projectId || null, holderId: p.holderId || null } });
+        if (!n.count) throw new BadRequestException(`${a.ref} has been assigned or taken out of the pool since this was requested.`);
+      }
       await tx.notification.create({ data: { userId: a.requestedById, icon: ok ? 'icon-badge-check' : 'icon-undo-2', text: `${by} ${ok ? 'approved' : 'sent back'} ${a.ref}`, link: '/approvals' } });
     });
     const area = a.docType === 'quote' ? 'quote' : a.docType === 'invoice' ? 'invoice' : 'project';

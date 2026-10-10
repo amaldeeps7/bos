@@ -182,7 +182,7 @@ export class AgentTools {
           this.has('project.read') ? p.project.findMany({ where: { customerId: cu.id } }) : Promise.resolve([]), p.opportunity.findMany({ where: { customerId: cu.id } }),
         ]);
         const info = invs.map(x => ({ x, f: this.fin.invInfo(x, c) }));
-        return { content: j({ id: cu.id, name: cu.name, gstin: cu.gstin, city: cu.city, contact: cu.contact, email: cu.email || '(none)', terms: `${cu.terms} days`,
+        return { content: j({ id: cu.id, name: cu.name, gstin: cu.gstin || '(not registered for GST)', city: cu.city, contact: cu.contact, email: cu.email || '(none)', terms: `${cu.terms} days`,
           outstanding: inr(info.reduce((a, r) => a + r.f.bal, 0)), invoices: info.map(({ x, f }) => ({ no: x.no, status: f.st, balance: inr(f.bal), due: fmtD(d(x.due)) })),
           openQuotations: quotes.map(q2 => ({ no: q2.no, title: q2.title, status: q2.status })), projects: projects.map(pr => ({ code: pr.code, name: pr.name, health: pr.health })),
           deals: deals.map(o => ({ name: o.name, value: inr(o.value), stage: o.stage, next: o.next })) }) };

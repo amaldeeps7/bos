@@ -6,6 +6,7 @@ import { useAct, useApp, useQ } from '@/lib/app';
 import type { Customer, Invoice, Payment } from '@/lib/types';
 import { Btn, Card, Icon, PageHead, Tabs } from '@/components/ui';
 import { PaymentDialogEdit } from '@/components/forms';
+import { ExportBtn } from '@/components/export-btn';
 
 const RC = '150px minmax(160px,1.2fr) 90px minmax(180px,1.4fr) 150px 130px 32px';
 const AC = 'minmax(180px,1.6fr) repeat(5,minmax(100px,1fr))';
@@ -23,7 +24,10 @@ export default function Payments() {
   const tot = [0, 0, 0, 0]; open.forEach(i => { tot[bucket(i)] += i.bal; });
   const byCust = [...new Set(open.map(i => i.customerId))].map(cid => { const r = [0, 0, 0, 0]; open.filter(i => i.customerId === cid).forEach(i => { r[bucket(i)] += i.bal; }); return { cid, r }; });
   return <>
-    <PageHead title="Payments" sub="Money received, and what customers still owe." right={tab === 'receivables' && <Btn icon="bell-ring" onClick={() => act('payments/remind-overdue')}>Remind overdue customers</Btn>} />
+    <PageHead title="Payments" sub="Money received, and what customers still owe." right={<div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+      {tab === 'receipts' ? <ExportBtn name="receipts" rows={() => payments.map(r => ({ 'Receipt no.': r.no, Date: r.date, Customer: cname.get(r.customerId) || '', Method: r.method, Reference: r.ref, Amount: r.amount, 'Against invoices': r.allocations.map(a => `${a.invoiceNo} (${a.amount})`).join('; ') }))} />
+        : <ExportBtn name="receivables" rows={() => open.map(i => ({ 'Invoice no.': i.no, Customer: cname.get(i.customerId) || '', 'Due date': i.due, 'Days overdue': Math.max(0, -diffDays(i.due, today)), Ageing: AGE[bucket(i)], Total: i.calc.grand, Balance: i.bal }))} />}
+      {tab === 'receivables' && <Btn icon="bell-ring" onClick={() => act('payments/remind-overdue')}>Remind overdue customers</Btn>}</div>} />
     <Tabs tabs={[{ id: 'receipts', label: 'Receipts', count: payments.length }, { id: 'receivables', label: 'Receivables', count: open.length }]} value={tab} onChange={setTab} />
     {edit && <PaymentDialogEdit payment={edit} onClose={() => setEdit(null)} />}
     {tab === 'receipts' ? (

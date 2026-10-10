@@ -4,7 +4,7 @@ export interface OrgRow { id: string; name: string; ini: string; slug: string; r
 export interface Me {
   user: { id: string; accountId: string; orgId: string; name: string; email: string; title: string; roleId: string; roleName: string; builtIn: boolean; perms: string[]; modules: Record<string, boolean>; scope: any };
   org: { id: string; name: string; slug: string; ini: string; plan: string; planLabel: string; setupDone: boolean; tz: string; currency: string; fyStart: string; ourState: string; discLimit: number; sacRates: Record<string, number>; templates: any; entity: { name: string; gstin: string; address: string; bank: string; upi: string } | null };
-  entities: { id: string; name: string; gstin: string; isDefault: boolean; address: string; bank: string; upi: string }[];
+  entities: { id: string; name: string; gst: boolean; gstin: string; state: string; isDefault: boolean; address: string; bank: string; upi: string }[];
   units: { id: string; name: string; entityId: string }[];
   orgs: OrgRow[];
   demo: boolean; serverTime: string;
@@ -24,7 +24,7 @@ export interface Meeting { id: string; title: string; date: string; start: numbe
 export interface Approval { id: string; kind: string; docType: string | null; docId: string | null; ref: string; title: string; detail: string; amount: number | null; by: string; approver: string; age: string; status: 'waiting' | 'sent' | 'approved' | 'rejected' }
 export interface Milestone { id: string; seq: number; name: string; pct: number; value: number; status: string; due: string; changedAt: string | null }
 export interface Project { id: string; name: string; code: string; customerId: string; customer: string; bu: string; contract: number; endDate: string; health: string; status: string; ownerId: string; quoteId: string | null; createdAt: string; milestones: Milestone[] }
-export interface Customer { id: string; name: string; gstin: string; state: string; city: string; contact: string; email: string; phone: string; terms: number; ownerId: string; since: string; outstanding: number; billed: number; projects: number; intra: boolean }
+export interface Customer { id: string; name: string; gstin: string; state: string; stateCode: string; city: string; contact: string; email: string; phone: string; terms: number; ownerId: string; since: string; outstanding: number; billed: number; projects: number; intra: boolean }
 export interface Opportunity { id: string; name: string; customerId: string; customer: string; value: number; ownerId: string; stage: number; next: string }
 export interface CatalogItem { id: string; d: string; sac: string; unit: string; rate: number }
 interface DocApproval { id: string; approverId: string; approverName: string }
@@ -40,7 +40,7 @@ export interface Settings {
   org: { name: string; slug: string; currency: string; tz: string; country: string; fy: string; dateFmt: string; createdAt: string; status: string };
   modules: { id: string; name: string; desc: string; icon: string; on: boolean }[];
   security: any; policy: any; taxOpts: any; reminders: any; templates: any;
-  entities: { id: string; name: string; gstin: string; pan: string; cin: string; address: string; bank: string; upi: string; isDefault: boolean; state: string }[];
+  entities: { id: string; name: string; gst: boolean; gstin: string; pan: string; cin: string; address: string; bank: string; upi: string; isDefault: boolean; state: string; stateCode: string }[];
   units: { id: string; name: string; code: string; entity: string; entityId: string; headId: string | null; head: string; projects: number }[];
   users: { id: string; name: string; email: string; title: string; role: string; scope: string; status: string; last: string }[];
   roles: Role[];

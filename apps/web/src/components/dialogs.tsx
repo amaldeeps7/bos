@@ -1,7 +1,7 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { addDays, dayLabel, diffDays, fmtT, gstText, inr, stateOf, weekday } from '@bos/shared';
+import { STATE_CODES, addDays, dayLabel, diffDays, fmtT, gstText, inr, stateOf, weekday } from '@bos/shared';
 import { api, ApiError } from '@/lib/api';
 import { MeetDraft, useAct, useApp, useQ } from '@/lib/app';
 import { dayOpts, findSlot, provider } from '@/lib/domain';
@@ -157,24 +157,25 @@ export function NewTaskDialog() {
 
 /** Add a customer, or edit one (ui.customer = 'new' | customer id). */
 export function CustomerDialog() {
-  const { ui, setUi, toast, people, has } = useApp(); const router = useRouter(); const qc = useQueryClient();
-  const ourState = useOurState();
+  const { ui, setUi, toast, people, has, me } = useApp(); const router = useRouter(); const qc = useQueryClient();
+  const ourState = useOurState(); const anyGst = me.entities.some(e => e.gst);
   const customers = useQ<Customer[]>('customers').data || [];
   const editing = ui.customer && ui.customer !== 'new' ? customers.find(c => c.id === ui.customer) : undefined;
-  const blank = { name: '', gstin: '', contact: '', email: '', phone: '', city: '', terms: '30', ownerId: '' };
+  const blank = { name: '', gstin: '', state: '', contact: '', email: '', phone: '', city: '', terms: '30', ownerId: '' };
   const [nc, setNc] = useState(blank); const [err, setErr] = useState('');
   useEffect(() => {
     if (!ui.customer) return;
     setErr('');
-    setNc(editing ? { name: editing.name, gstin: editing.gstin, contact: editing.contact, email: editing.email, phone: editing.phone, city: editing.city, terms: String(editing.terms), ownerId: editing.ownerId } : blank);
+    setNc(editing ? { name: editing.name, gstin: editing.gstin, state: editing.stateCode, contact: editing.contact, email: editing.email, phone: editing.phone, city: editing.city, terms: String(editing.terms), ownerId: editing.ownerId } : blank);
   }, [ui.customer, editing?.id]); // eslint-disable-line react-hooks/exhaustive-deps
   if (!ui.customer || (ui.customer !== 'new' && !editing)) return null;
   const close = () => setUi({ customer: null });
   const g = nc.gstin.trim().toUpperCase(); const st = stateOf(g);
-  const hint = !g ? 'The first two digits set the state, which decides CGST + SGST or IGST.' : g.length < 15 ? `${g.length} of 15 characters${st ? ` · ${st}` : ''}` : st ? `${st} — ${gstText(st === ourState)} on every invoice` : 'Unrecognised state code in the first two digits.';
+  const hint = !g ? (anyGst ? 'Leave it blank if they aren’t registered for GST and pick their state below.' : 'Optional. Your documents don’t charge GST.') : !anyGst ? (st || '') : g.length < 15 ? `${g.length} of 15 characters${st ? ` · ${st}` : ''}` : st ? `${st} — ${gstText(st === ourState)} on every invoice` : 'Unrecognised state code in the first two digits.';
   const set = (k: string) => (e: { target: { value: string } }) => { setNc({ ...nc, [k]: e.target.value }); setErr(''); };
   const save = async () => {
     if (!nc.name.trim()) return setErr('Enter the business name.');
+    if (!g && !nc.state) return setErr('Pick the customer’s state. It sets the place of supply.');
     try {
       const body = { ...nc, gstin: g, terms: +nc.terms, ownerId: nc.ownerId || undefined };
       if (editing) { const r = await api<{ message: string }>(`customers/${editing.id}`, { method: 'PATCH', body }); await qc.invalidateQueries(); close(); toast(r.message); }
@@ -187,14 +188,16 @@ export function CustomerDialog() {
     catch (e) { setErr(e instanceof ApiError ? e.message : 'Could not archive.'); }
   };
   return (
-    <Dialog width={560} title={editing ? `Edit ${editing.name}` : 'Add customer'} sub={editing ? 'Changes apply to new quotations and invoices. Issued documents keep the details they were issued with.' : 'The GSTIN decides how tax is charged on every quotation and invoice.'} onClose={close}
+    <Dialog width={560} title={editing ? `Edit ${editing.name}` : 'Add customer'} sub={editing ? 'Changes apply to new quotations and invoices. Issued documents keep the details they were issued with.' : anyGst ? 'The GSTIN, or the state if they have none, decides how GST is charged.' : 'Who you bill, and where to send it.'} onClose={close}
       footer={<>{editing && has('customer.archive') && <Btn kind="danger" icon="archive" onClick={archive} style={{ marginRight: 'auto' }}>Archive</Btn>}<Btn onClick={close} style={{ boxShadow: 'none' }}>Cancel</Btn><Btn kind="pri" onClick={save}>{editing ? 'Save changes' : 'Add customer'}</Btn></>}>
       <div style={{ padding: '18px 20px', display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(200px,1fr))', gap: 14 }}>
         <label className="label" style={{ gridColumn: '1/-1' }}>Business name<input className="input" autoFocus value={nc.name} onChange={set('name')} placeholder="Registered name" style={{ fontSize: 15 }} /></label>
-        <label className="label" style={{ gridColumn: '1/-1' }}>GSTIN
+        <label className="label" style={{ gridColumn: '1/-1' }}><span>GSTIN <span style={{ fontWeight: 400, color: '#64748b' }}>(optional)</span></span>
           <input className="input mono" value={nc.gstin} onChange={set('gstin')} placeholder="29ABCDE1234F1Z5" maxLength={15} style={{ fontSize: 15, textTransform: 'uppercase' }} />
           <span style={{ fontSize: 13, fontWeight: 400, color: g.length === 15 ? (st ? '#047857' : '#be123c') : '#64748b' }}>{hint}</span>
         </label>
+        {!g && <label className="label" style={{ gridColumn: '1/-1' }}>State<select className="select" value={nc.state} onChange={set('state')}><option value="">Pick a state…</option>{Object.entries(STATE_CODES).sort((a, b) => a[1].localeCompare(b[1])).map(([c, n]) => <option key={c} value={c}>{n}</option>)}</select>
+          {anyGst && nc.state && <span style={{ fontSize: 13, fontWeight: 400, color: '#64748b' }}>{STATE_CODES[nc.state]} — {gstText(STATE_CODES[nc.state] === ourState)} on GST invoices</span>}</label>}
         <label className="label">Billing contact<input className="input" value={nc.contact} onChange={set('contact')} placeholder="Name, role" /></label>
         <label className="label">Billing email<input className="input" type="email" value={nc.email} onChange={set('email')} placeholder="accounts@company.in" /></label>
         <label className="label">Phone<input className="input" value={nc.phone} onChange={set('phone')} placeholder="+91 …" /></label>

@@ -2,7 +2,7 @@ import { BadRequestException, Body, Controller, Delete, ForbiddenException, Get,
 import { randomBytes } from 'crypto';
 import type { Response } from 'express';
 import * as bcrypt from 'bcryptjs';
-import { DEFAULT_ROLES, formatNumber, isValidGstin, stateOf, todayISO } from '@bos/shared';
+import { DEFAULT_ROLES, formatNumber, placeOf, todayISO } from '@bos/shared';
 import { PrismaService } from '../core/prisma.service';
 import { RedisService } from '../core/redis.service';
 import { SessionService } from '../core/session.service';
@@ -13,7 +13,7 @@ import { Me, Perm, Public } from '../core/decorators';
 import type { AuthUser } from '../core/auth.types';
 import { DEFAULT_SAC, PLANS, TRIAL_DAYS, orgDefaults, planAllows, planOf } from '../core/plans';
 import { orgId, runAs } from '../core/tenant';
-import { str } from '../core/util';
+import { gstParty, str } from '../core/util';
 import { ExportService } from './export.service';
 import { ini, planLabel } from './auth.controller';
 
@@ -54,7 +54,7 @@ export class OrgsController {
     if (await this.prisma.organization.findUnique({ where: { slug } })) throw new BadRequestException(`${slug}.bos.app is taken. Try another.`);
     const e = b.entity || {};
     const leName = str(e.name, 'Registered name', { max: 200 }).trim(); if (!leName) throw new BadRequestException('Enter the registered name.');
-    const gstin = str(e.gstin, 'GSTIN', { max: 15 }).trim().toUpperCase(); if (!isValidGstin(gstin)) throw new BadRequestException('Enter a valid 15-character GSTIN.');
+    const gst = e.gst !== false; const { gstin, state } = gstParty({ gstin: gst ? e.gstin : '', state: e.state }, gst); // "Not registered for GST": no GSTIN, a state instead
     const n = b.numbering || {}; const pattern = PATTERNS.includes(n.pattern) ? n.pattern : PATTERNS[0];
     const inv = prefix(n.inv, 'INV'), qt = prefix(n.qt, 'QT');
     const currency = ['INR', 'USD', 'AED', 'SGD'].includes(b.currency) ? b.currency : 'INR';
@@ -83,7 +83,7 @@ export class OrgsController {
       const roles: Record<string, string> = {};
       for (const [i, r] of DEFAULT_ROLES.entries()) roles[r.name] = (await tx.role.create({ data: { name: r.name, desc: r.desc, builtIn: !!r.builtIn, perms: r.perms, sort: i } })).id;
       const owner = await tx.membership.create({ data: { accountId: account.id, email: account.email, name: account.name, roleId: roles.Owner, status: 'Active', calendar: false, joinedAt: new Date() } });
-      const le = await tx.legalEntity.create({ data: { name: leName, gstin, pan: gstin.slice(2, 12), cin: '', address: str(e.address, 'Address', { max: 500 }).trim(), bank: '', upi: '', isDefault: true } });
+      const le = await tx.legalEntity.create({ data: { name: leName, gst, gstin, state, pan: gstin ? gstin.slice(2, 12) : '', cin: '', address: str(e.address, 'Address', { max: 500 }).trim(), bank: '', upi: '', isDefault: true } });
       const ser = (type: string, label: string, p: string, entityId: string | null, pat = pattern) =>
         tx.series.create({ data: { type, label, prefix: p, pattern: pat, padding: 4, next: 1, reset: pat.includes('{seq}') && pat !== '{prefix}-{seq}' ? 'every financial year' : 'never', entityId } });
       await ser('INVOICE', 'Invoices', inv, le.id); await ser('CREDIT_NOTE', 'Credit notes', 'CN', le.id); await ser('RECEIPT', 'Receipts', 'RCP', le.id);
@@ -127,10 +127,10 @@ export class OrgsController {
     return {
       setupDone: org.setupDone, name: org.name,
       steps: { org: true, entity: !!entity, numbering: !!series, team: team > 0, customer: customers > 0, catalog: catalog > 0, calendar: !!mine?.calendar },
-      detail: { currency: org.currency, fy: org.fyStart, tz: org.tz, entity: entity ? `${entity.name} · GSTIN ${entity.gstin}` : '', invited: team,
+      detail: { currency: org.currency, fy: org.fyStart, tz: org.tz, entity: entity ? `${entity.name} · ${entity.gst ? `GSTIN ${entity.gstin}` : 'Not registered for GST'}` : '', invited: team,
         firstInvoice: series ? formatNumber(series, todayISO(org.tz), org.fyStart) : '' },
       facts: [['Address', `${org.slug}.bos.app`], ['Plan', planLabel(org)], ['Your role', me.roleName], ['Data region', REGIONS[org.region] || org.region],
-        ['Issuing entity', entity ? `${entity.name} · ${stateOf(entity.gstin) || ''}` : '—']].map(([label, value]) => ({ label, value })),
+        ['Issuing entity', entity ? `${entity.name} · ${placeOf(entity) || ''}` : '—']].map(([label, value]) => ({ label, value })),
     };
   }
 

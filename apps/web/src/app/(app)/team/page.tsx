@@ -5,6 +5,7 @@ import { useApp, useQ } from '@/lib/app';
 import type { TeamMember } from '@/lib/types';
 import { Card, Empty, Icon, PageHead, Tabs } from '@/components/ui';
 import { Face, STATUS_COLOR } from '@/components/team';
+import { ExportBtn } from '@/components/export-btn';
 
 const line = '#cbd5e1';
 
@@ -49,7 +50,8 @@ export default function TeamPage() {
 
   return (
     <>
-      <PageHead title="Team" sub={`${people.length} ${people.length === 1 ? 'person' : 'people'} · ${inMeet} in a meeting now · ${away} on leave`} />
+      <PageHead title="Team" sub={`${people.length} ${people.length === 1 ? 'person' : 'people'} · ${inMeet} in a meeting now · ${away} on leave`}
+        right={<ExportBtn name="team" rows={() => rows.map(p => ({ Name: p.name, Title: p.title, Department: p.dept, Email: p.email, Manager: people.find(m => m.id === p.managerId)?.name || '', Status: p.statusLabel }))} />} />
       <Tabs tabs={[{ id: 'org', label: 'Org chart' }, { id: 'dir', label: 'Directory' }]} value={tab} onChange={setTab} />
 
       {tab === 'org' && <>

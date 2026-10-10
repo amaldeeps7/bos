@@ -87,7 +87,9 @@ model LegalEntity {
   org       Organization   @relation(fields: [orgId], references: [id], onDelete: Cascade)
   id        String         @id @default(cuid())
   name      String
-  gstin     String
+  gst       Boolean        @default(true) // registered for GST; off → plain invoices with no tax
+  gstin     String // empty when not registered
+  state     String         @default("") // two-digit state code, used when there's no GSTIN
   pan       String
   cin       String
   address   String
@@ -189,7 +191,8 @@ model Customer {
   org      Organization  @relation(fields: [orgId], references: [id], onDelete: Cascade)
   id       String        @id @default(cuid())
   name     String
-  gstin    String
+  gstin    String? // null for customers not registered for GST
+  state    String        @default("") // two-digit state code (place of supply) when there's no GSTIN
   city     String
   contact  String
   email    String
@@ -410,6 +413,7 @@ model Quote {
   no         String
   customerId String
   customer   Customer     @relation(fields: [customerId], references: [id])
+  gst        Boolean      @default(true) // charges GST; copied from the entity, fixed once issued
   title      String
   date       DateTime     @db.Date
   validUntil DateTime     @db.Date
@@ -436,6 +440,7 @@ model Invoice {
   no          String
   customerId  String
   customer    Customer            @relation(fields: [customerId], references: [id])
+  gst         Boolean             @default(true) // charges GST; copied from the entity, fixed once issued
   title       String
   projectId   String?
   project     Project?            @relation(fields: [projectId], references: [id])

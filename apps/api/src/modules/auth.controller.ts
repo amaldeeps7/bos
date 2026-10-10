@@ -1,6 +1,7 @@
 import { BadRequestException, Body, Controller, ForbiddenException, Get, HttpCode, HttpException, HttpStatus, Param, Post, Res, UnauthorizedException } from '@nestjs/common';
 import type { Response } from 'express';
 import * as bcrypt from 'bcryptjs';
+import { placeOf } from '@bos/shared';
 import { PrismaService } from '../core/prisma.service';
 import { RedisService } from '../core/redis.service';
 import { OrgService } from '../core/org.service';
@@ -120,7 +121,7 @@ export class AuthController {
       user: me,
       org: { id: org.id, name: org.name, slug: org.slug, ini: ini(org.name), plan: org.plan, planLabel: planLabel(org), setupDone: org.setupDone, tz: org.tz, currency: org.currency, fyStart: org.fyStart,
         ourState: c.ourState || '', discLimit: c.discLimit, sacRates: c.sacRates, templates: org.templates, entity: c.entity },
-      entities: entities.map(e => ({ id: e.id, name: e.name, gstin: e.gstin, isDefault: e.isDefault, address: e.address, bank: e.bank, upi: e.upi })),
+      entities: entities.map(e => ({ id: e.id, name: e.name, gst: e.gst, gstin: e.gstin, state: placeOf(e) || '', isDefault: e.isDefault, address: e.address, bank: e.bank, upi: e.upi })),
       units: units.map(u => ({ id: u.id, name: u.name, entityId: u.entityId })),
       orgs: list.map(({ m, org: o }) => ({ id: o.id, name: o.name, ini: ini(o.name), slug: o.slug, role: m.role.name, sub: planLabel(o), current: o.id === org.id, setupDone: o.setupDone })),
       demo: me.demo, serverTime: new Date().toISOString(),

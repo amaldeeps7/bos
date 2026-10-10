@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { calc, isValidGstin, formatNumber, diffDays, addDays, fmtT, hm, inr, fyLabel } from './index';
+import { calc, placeOf, isValidGstin, formatNumber, diffDays, addDays, fmtT, hm, inr, fyLabel } from './index';
 
 test('GST is split CGST+SGST within the state and IGST across states', () => {
   const lines = [{ d: 'Senior engineer', qty: 10, unit: 'day', rate: 28000, disc: 0, sac: '998314' }, { d: 'PM', qty: 1, unit: 'fixed', rate: 40000, disc: 0, sac: '998314' }];
@@ -32,4 +32,11 @@ test('amounts in words, Indian style', () => {
   assert.equal(rupeesInWords(377600), 'Rupees three lakh seventy-seven thousand six hundred only');
   assert.equal(inWords(11328000), 'one crore thirteen lakh twenty-eight thousand');
   assert.equal(inWords(101), 'one hundred one');
+});
+
+test('non-GST documents carry no tax', () => {
+  const k = calc([{ d: 'x', qty: 2, unit: 'day', rate: 1000, disc: 10, sac: '998314' }], 'Karnataka', 'Karnataka', {}, false);
+  assert.deepEqual([k.taxable, k.tax, k.grand, k.taxRows.length, k.gst, k.intra], [1800, 0, 1800, 0, false, false]);
+  assert.equal(placeOf({ gstin: null, state: '27' }), 'Maharashtra');
+  assert.equal(placeOf({ gstin: '29AADCH7713P1ZQ', state: '' }), 'Karnataka');
 });

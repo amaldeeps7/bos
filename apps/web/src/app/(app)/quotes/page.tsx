@@ -2,6 +2,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { QUOTE_STATUS, fmtD, inr } from '@bos/shared';
+import { ExportBtn } from '@/components/export-btn';
 import { useApp, useQ } from '@/lib/app';
 import type { Customer, Quote } from '@/lib/types';
 import { Btn, Card, PageHead, Status, Tabs } from '@/components/ui';
@@ -17,7 +18,9 @@ export default function Quotes() {
   const f: Record<Tab, (q: Quote) => boolean> = { all: () => true, draft: q => ['DRAFT', 'PENDING_APPROVAL', 'APPROVED'].includes(q.status), sent: q => q.status === 'SENT', won: q => ['ACCEPTED', 'CONVERTED'].includes(q.status) };
   const rows = quotes.filter(f[tab]).sort((a, b) => b.date.localeCompare(a.date) || b.no.localeCompare(a.no));
   return <>
-    <PageHead title="Quotations" sub="Priced proposals. Accepted ones become a project or an invoice without re-keying." right={has('quote.create') && <Btn kind="pri" icon="plus" onClick={() => router.push('/quotes/new')}>New quotation</Btn>} />
+    <PageHead title="Quotations" sub="Priced proposals. Accepted ones become a project or an invoice without re-keying." right={<div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+      <ExportBtn name="quotations" rows={() => rows.map(q => ({ 'Quotation no.': q.no, Version: q.ver, Date: q.date, 'Valid until': q.validUntil, Status: QUOTE_STATUS[q.status]?.[0] || q.status, Customer: cust.get(q.customerId) || '', Title: q.title, 'Issued by': q.entity, Subtotal: q.calc.sub, Discount: q.calc.disc, 'Taxable value': q.calc.taxable, GST: q.calc.tax, Total: q.calc.grand }))} />
+      {has('quote.create') && <Btn kind="pri" icon="plus" onClick={() => router.push('/quotes/new')}>New quotation</Btn>}</div>} />
     <Tabs tabs={([['all', 'All'], ['draft', 'In progress'], ['sent', 'With customer'], ['won', 'Won']] as [Tab, string][]).map(([id, label]) => ({ id, label, count: quotes.filter(f[id]).length }))} value={tab} onChange={setTab} />
     <Card style={{ overflowX: 'auto' }}>
       <div style={{ minWidth: 820 }}>

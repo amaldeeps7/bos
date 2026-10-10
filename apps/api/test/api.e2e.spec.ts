@@ -52,7 +52,7 @@ describe('billing', () => {
   it('computes GST by place of supply', async () => {
     const pm = await login('priya@democonsulting.in');
     const inv = (await request(app.getHttpServer()).get('/api/invoices').set('Cookie', pm)).body;
-    const intra = inv.find((i: any) => i.no === 'INV-2026-0142'); // Brightline, Karnataka
+    const intra = inv.find((i: any) => i.title === 'Patient Intake App — Integrations'); // Brightline, Karnataka
     const inter = inv.find((i: any) => i.no === 'INV-2026-0131'); // Kestrel, Maharashtra
     expect(intra.calc.taxRows.map((r: any) => r[0])).toEqual(['CGST 9%', 'SGST 9%']);
     expect(intra.calc.grand).toBe(1132800);
@@ -66,11 +66,14 @@ describe('billing', () => {
     const m = p.milestones.find((x: any) => x.status === 'COMPLETED');
     const bill = await request(app.getHttpServer()).post(`/api/projects/${p.id}/milestones/${m.id}/bill`).set('Cookie', pm).expect(200);
     const id = bill.body.invoiceId;
-    // Priya raised it, so she can't approve it — it waits on Finance.
+    // Priya raised it, so she can't approve it. Finance (Meera) is on leave, so it waits on the Owner.
     await request(app.getHttpServer()).post(`/api/invoices/${id}/approve`).set('Cookie', pm).send({}).expect(403);
+    const owner = await login('anand@democonsulting.in');
+    await request(app.getHttpServer()).post(`/api/invoices/${id}/approve`).set('Cookie', owner).send({}).expect(200);
     const fin = await login('meera@democonsulting.in');
-    await request(app.getHttpServer()).post(`/api/invoices/${id}/approve`).set('Cookie', fin).send({}).expect(200);
-    await request(app.getHttpServer()).post(`/api/invoices/${id}/issue`).set('Cookie', fin).expect(200);
+    // The draft had no number; issuing takes the next one in the entity's series.
+    const issued = await request(app.getHttpServer()).post(`/api/invoices/${id}/issue`).set('Cookie', fin).expect(200);
+    expect(issued.body.no).toBe(`INV-${new Date().getFullYear()}-0142`);
     await request(app.getHttpServer()).post(`/api/invoices/${id}/send`).set('Cookie', fin).expect(200);
     const pay = await request(app.getHttpServer()).post('/api/payments').set('Cookie', fin).send({ invoiceId: id, amount: 944000, method: 'NEFT', ref: 'T1' }).expect(201);
     expect(pay.body.message).toMatch(/^RCP-\d{4}-0065 recorded/);
@@ -270,13 +273,15 @@ describe('multitenancy (spec §9)', () => {
 
   it('allows the same customer GSTIN and invoice number in two organisations', async () => {
     const owner = await login('anand@democonsulting.in');
-    const demoInv = (await http().get('/api/invoices').set('Cookie', owner)).body.find((i: any) => i.no === 'INV-2026-0142');
-    // Org B: same GSTIN as Demo's Kestrel Bank, and a series lined up to issue INV-2026-0142 too.
+    const demoInv = (await http().get('/api/invoices').set('Cookie', owner)).body.find((i: any) => i.no === 'INV-2026-0131');
+    // Org B: same GSTIN as Demo's Kestrel Bank, and a series lined up to issue INV-2026-0131 too.
     const cust = await http().post('/api/customers').set('Cookie', b.cookie).send({ name: 'Kestrel Bank', gstin: '27AAACK4821M1Z5', city: 'Mumbai', email: 'ap@kestrelbank.in' }).expect(201);
     const s = (await http().get('/api/settings').set('Cookie', b.cookie)).body.series.find((x: any) => x.type === 'INVOICE');
-    await http().patch(`/api/settings/series/${s.id}`).set('Cookie', b.cookie).send({ prefix: 'INV', pattern: '{prefix}-{yyyy}-{seq}', padding: 4, next: 142 }).expect(200);
-    const inv = await http().post('/api/invoices').set('Cookie', b.cookie).send({ customerId: cust.body.id, lines: [{ d: 'Advisory', qty: 1, unit: 'fixed', rate: 100000 }] }).expect(201);
-    expect(inv.body.message).toMatch(new RegExp(`^${demoInv.no.slice(0, 9)}`));
+    await http().patch(`/api/settings/series/${s.id}`).set('Cookie', b.cookie).send({ prefix: 'INV', pattern: '{prefix}-{yyyy}-{seq}', padding: 4, next: 131 }).expect(200);
+    await http().patch('/api/settings/policy').set('Cookie', b.cookie).send({ invAll: false }).expect(200); // a one-person organisation
+    const inv = await http().post('/api/invoices').set('Cookie', b.cookie).send({ customerId: cust.body.id, submit: true, lines: [{ d: 'Advisory', qty: 1, unit: 'fixed', rate: 100000 }] }).expect(201);
+    const issued = await http().post(`/api/invoices/${inv.body.id}/issue`).set('Cookie', b.cookie).expect(200);
+    expect(issued.body.no).toBe(demoInv.no);
     const mine = (await http().get('/api/invoices').set('Cookie', b.cookie)).body;
     expect(mine.map((i: any) => i.no)).toEqual([demoInv.no]);
   });
@@ -313,9 +318,14 @@ describe('multitenancy (spec §9)', () => {
     const fin = await login('meera@democonsulting.in');
     const me = (await http().get('/api/auth/me').set('Cookie', fin)).body;
     const [le1, le2] = me.entities; const cust = (await http().get('/api/customers').set('Cookie', fin)).body[0];
-    const make = (entityId: string) => http().post('/api/invoices').set('Cookie', fin).send({ customerId: cust.id, entityId, lines: [{ d: 'x', qty: 1, unit: 'fixed', rate: 1000 }] }).expect(201);
-    const rs = await Promise.all([le1, le2, le1, le2, le1, le2].map(e => make(e.id)));
-    const nos = rs.map(r => r.body.message.split(' ')[0]);
+    const owner = await login('anand@democonsulting.in');
+    await http().patch('/api/settings/policy').set('Cookie', owner).send({ invAll: false }).expect(200);
+    const make = (entityId: string) => http().post('/api/invoices').set('Cookie', fin).send({ customerId: cust.id, entityId, submit: true, lines: [{ d: 'x', qty: 1, unit: 'fixed', rate: 1000 }] }).expect(201);
+    const drafts = await Promise.all([le1, le2, le1, le2, le1, le2].map(e => make(e.id)));
+    // Issue all six at once: numbers come from each entity's locked counter.
+    const rs = await Promise.all(drafts.map(r => http().post(`/api/invoices/${r.body.id}/issue`).set('Cookie', fin).expect(200)));
+    await http().patch('/api/settings/policy').set('Cookie', owner).send({ invAll: true }).expect(200);
+    const nos = rs.map(r => r.body.no);
     const seqs = (p: string) => nos.filter(n => n.startsWith(p)).map(n => +n.slice(-4)).sort((a, z) => a - z);
     const a = seqs('INV-'), m = seqs('MH-INV-');
     expect(a).toHaveLength(3); expect(m).toHaveLength(3);
@@ -365,7 +375,8 @@ describe('multitenancy (spec §9)', () => {
     const owner = await login('anand@democonsulting.in');
     await http().post('/api/orgs/current/export').set('Cookie', owner).expect(201);
     let x: any;
-    for (let i = 0; i < 60 && x?.status !== 'Ready'; i++) { await new Promise(r => setTimeout(r, 250)); x = (await http().get('/api/orgs/current/data').set('Cookie', owner)).body.exports[0]; }
+    // Every issued PDF is rendered, so give it time.
+    for (let i = 0; i < 120 && x?.status !== 'Ready'; i++) { await new Promise(r => setTimeout(r, 500)); x = (await http().get('/api/orgs/current/data').set('Cookie', owner)).body.exports[0]; }
     expect(x.status).toBe('Ready');
     const path = new URL(x.url).pathname + new URL(x.url).search;
     const zip = await http().get(path).buffer(true).parse((res, cb) => { const c: Buffer[] = []; res.on('data', d => c.push(d)); res.on('end', () => cb(null, Buffer.concat(c))); }).expect(200);
@@ -373,7 +384,7 @@ describe('multitenancy (spec §9)', () => {
     await http().get(path.replace(/sig=[0-9a-f]/, 'sig=0')).expect(400);
     // Another organisation's members can't list it.
     expect((await http().get('/api/orgs/current/data').set('Cookie', b.cookie)).body.exports).toHaveLength(0);
-  }, 30000);
+  }, 90000);
 
   it('enforces plan limits and lets only the Owner close the organisation', async () => {
     const owner = await login('anand@democonsulting.in');
@@ -446,5 +457,114 @@ describe('assistant: built-in answers without a key, agent with one', () => {
       await http().post('/api/ai/agent').set('Cookie', field).send({ question: 'hi' }).expect(200);
       expect(calls[0].tools.map((t: any) => t.name)).not.toContain('list_invoices');
     } finally { agent.client = saved; }
+  });
+});
+
+describe('workflows and approvals', () => {
+  const http = () => request(app.getHttpServer());
+
+  it('numbers invoices when issued, so cancelled drafts leave no gaps; a cancelled milestone invoice can be billed again', async () => {
+    const pm = await login('priya@democonsulting.in'); const owner = await login('anand@democonsulting.in'); const fin = await login('meera@democonsulting.in');
+    const p = (await http().get('/api/projects').set('Cookie', pm)).body.find((x: any) => x.code === 'PRJ-0027');
+    const m = p.milestones[0];
+    await http().post(`/api/projects/${p.id}/milestones/${m.id}/complete`).set('Cookie', pm).expect(200);
+    const first = (await http().post(`/api/projects/${p.id}/milestones/${m.id}/bill`).set('Cookie', pm).expect(200)).body.invoiceId;
+    const draft = (await http().get('/api/invoices').set('Cookie', fin)).body.find((i: any) => i.id === first);
+    expect(draft.no).toMatch(/^DRAFT-/);
+    await http().post(`/api/invoices/${first}/cancel`).set('Cookie', fin).expect(200);
+    const back = (await http().get('/api/projects').set('Cookie', pm)).body.find((x: any) => x.id === p.id).milestones[0];
+    expect(back.status).toBe('COMPLETED');
+    const second = (await http().post(`/api/projects/${p.id}/milestones/${m.id}/bill`).set('Cookie', pm).expect(200)).body.invoiceId;
+    await http().post(`/api/invoices/${second}/approve`).set('Cookie', owner).send({}).expect(200);
+    const before = (await http().get('/api/settings').set('Cookie', owner)).body.series.find((s: any) => s.type === 'INVOICE' && s.prefix === 'INV').next;
+    const issued = (await http().post(`/api/invoices/${second}/issue`).set('Cookie', fin).expect(200)).body.no;
+    expect(+issued.slice(-4)).toBe(before); // the cancelled draft didn't use a number
+  });
+
+  it('lets someone approve their own document only when nobody else can and policy allows it', async () => {
+    const owner = await login('anand@democonsulting.in');
+    const cust = (await http().get('/api/customers').set('Cookie', owner)).body[0];
+    const big = { customerId: cust.id, submit: true, lines: [{ d: 'Big', qty: 1, unit: 'fixed', rate: 100000, disc: 30 }] };
+    await http().post('/api/quotes').set('Cookie', owner).send(big).expect(400); // Owner raised it, only the Owner approves, self-approval off
+    await http().patch('/api/settings/policy').set('Cookie', owner).send({ noSelf: false }).expect(200);
+    const r = await http().post('/api/quotes').set('Cookie', owner).send(big).expect(201);
+    expect(r.body.message).toMatch(/approved \(you’re the only Owner\)/);
+    await http().patch('/api/settings/policy').set('Cookie', owner).send({ noSelf: true }).expect(200);
+  });
+
+  it('moves approvals waiting on someone who is deactivated', async () => {
+    const owner = await login('anand@democonsulting.in'); const pm = await login('priya@democonsulting.in');
+    const waiting = (await http().get('/api/approvals').set('Cookie', pm)).body.filter((a: any) => a.status === 'waiting').length;
+    expect(waiting).toBeGreaterThan(0);
+    const priya = (await http().get('/api/settings').set('Cookie', owner)).body.users.find((u: any) => u.email === 'priya@democonsulting.in');
+    const r = await http().post(`/api/settings/users/${priya.id}/toggle`).set('Cookie', owner).expect(200);
+    expect(r.body.message).toMatch(/moved to someone else/);
+    await http().post(`/api/settings/users/${priya.id}/toggle`).set('Cookie', owner).expect(200); // reactivate
+    const pm2 = await login('priya@democonsulting.in');
+    expect((await http().get('/api/approvals').set('Cookie', pm2)).body.filter((a: any) => a.status === 'waiting').length).toBe(0);
+  });
+
+  it('routes equipment requests for approval, and assignments above the limit to a second person', async () => {
+    const field = await login('arjun@democonsulting.in'); const pm = await login('priya@democonsulting.in'); const owner = await login('anand@democonsulting.in');
+    const assets = (await http().get('/api/assets').set('Cookie', owner)).body;
+    const phone = assets.find((a: any) => a.code === 'AST-0020'); const keys = assets.find((a: any) => a.code === 'AST-0031');
+    const req = await http().post(`/api/assets/${phone.id}/request`).set('Cookie', field).send({}).expect(200);
+    expect(req.body.message).toMatch(/for approval/);
+    await http().post(`/api/assets/${phone.id}/request`).set('Cookie', pm).send({}).expect(400); // already asked for
+    const ap = (await http().get('/api/approvals').set('Cookie', pm)).body.find((a: any) => a.ref === 'AST-0020' && a.status === 'waiting');
+    await http().post(`/api/approvals/${ap.id}/decide`).set('Cookie', pm).send({ approve: true }).expect(200);
+    const after = (await http().get('/api/assets').set('Cookie', owner)).body.find((a: any) => a.code === 'AST-0020');
+    expect([after.status, after.holderId]).toEqual(['IN_USE', (await http().get('/api/auth/me').set('Cookie', field)).body.user.id]);
+    // Above the limit, a Project manager (assign, not manage) can't hand it out alone.
+    await http().patch('/api/settings/policy').set('Cookie', owner).send({ assetMax: 20000 }).expect(200);
+    const r = await http().post(`/api/assets/${keys.id}/assign`).set('Cookie', pm).send({}).expect(200);
+    expect(r.body.message).toMatch(/for approval/);
+    expect((await http().get('/api/assets').set('Cookie', owner)).body.find((a: any) => a.code === 'AST-0031').status).toBe('AVAILABLE');
+    await http().patch('/api/settings/policy').set('Cookie', owner).send({ assetMax: 50000 }).expect(200);
+  });
+});
+
+/** The PDF's document title (pdfkit writes it as an indirect, often UTF-16 hex, string). */
+function pdfTitle(pdf: string) {
+  const ref = pdf.match(/\/Title (\d+) 0 R/)?.[1]; const raw = (ref ? pdf.match(new RegExp(`\\n${ref} 0 obj\\n([^\\n]*)`))?.[1] : pdf.match(/\/Title ([^\n]*)/)?.[1]) || '';
+  if (raw.startsWith('<')) { const b = Buffer.from(raw.slice(1, -1), 'hex'); return (b.subarray(0, 2).toString('hex') === 'feff' ? b.subarray(2).swap16().toString('utf16le') : b.toString('latin1')); }
+  return raw.replace(/^\(|\)$/g, '').replace(/\\([()\\])/g, '$1');
+}
+
+describe('GST on and off', () => {
+  const http = () => request(app.getHttpServer());
+  const pdfOf = (path: string, cookie: string[]) => http().get(path).set('Cookie', cookie).buffer(true).parse((res, cb) => { const c: Buffer[] = []; res.on('data', d => c.push(d)); res.on('end', () => cb(null, Buffer.concat(c))); }).expect(200);
+
+  it('lets an entity issue plain, untaxed documents; issued ones keep their GST', async () => {
+    const owner = await login('anand@democonsulting.in');
+    const le2 = (await http().get('/api/auth/me').set('Cookie', owner)).body.entities.find((e: any) => e.name.endsWith('LLP'));
+    const issuedBefore = (await http().get('/api/invoices').set('Cookie', owner)).body.filter((i: any) => i.entityId === le2.id && !['DRAFT', 'PENDING_APPROVAL', 'APPROVED', 'CANCELLED'].includes(i.status));
+    // A GST entity needs its GSTIN; switching off needs a state instead.
+    await http().patch(`/api/settings/entities/${le2.id}`).set('Cookie', owner).send({ gstin: '' }).expect(400);
+    const off = await http().patch(`/api/settings/entities/${le2.id}`).set('Cookie', owner).send({ gst: false, state: '27' }).expect(200);
+    expect(off.body.message).toMatch(/GST is off/);
+
+    // A customer with no GSTIN, just a state.
+    await http().post('/api/customers').set('Cookie', owner).send({ name: 'Corner Bakery' }).expect(400);
+    const cust = await http().post('/api/customers').set('Cookie', owner).send({ name: 'Corner Bakery', state: 'Maharashtra', city: 'Pune' }).expect(201);
+    const listed = (await http().get('/api/customers').set('Cookie', owner)).body.find((c: any) => c.id === cust.body.id);
+    expect([listed.gstin, listed.state]).toEqual(['', 'Maharashtra']);
+
+    const inv = await http().post('/api/invoices').set('Cookie', owner).send({ customerId: cust.body.id, entityId: le2.id, lines: [{ d: 'Website', qty: 2, unit: 'day', rate: 10000, disc: 0, sac: '998314' }] }).expect(201);
+    const got = (await http().get('/api/invoices').set('Cookie', owner)).body.find((i: any) => i.id === inv.body.id);
+    expect([got.calc.gst, got.calc.tax, got.calc.grand, got.calc.taxRows.length]).toEqual([false, 0, 20000, 0]);
+    const pdf = (await pdfOf(`/api/invoices/${inv.body.id}/pdf`, owner)).body.toString('latin1');
+    expect(pdfTitle(pdf)).toMatch(/^Invoice \(draft\) DRAFT-/);
+    expect(pdf).not.toMatch(/Tax invoice/);
+
+    // Issued invoices of the entity are unchanged.
+    const after = (await http().get('/api/invoices').set('Cookie', owner)).body;
+    for (const b of issuedBefore) expect(after.find((i: any) => i.id === b.id).calc.tax).toBe(b.calc.tax);
+
+    // Registering again: drafts follow, and are taxed (Maharashtra → Maharashtra, so CGST + SGST).
+    await http().patch(`/api/settings/entities/${le2.id}`).set('Cookie', owner).send({ gst: true }).expect(400); // GSTIN needed
+    await http().patch(`/api/settings/entities/${le2.id}`).set('Cookie', owner).send({ gst: true, gstin: '27AAJFD2210K1ZP' }).expect(200);
+    const back = (await http().get('/api/invoices').set('Cookie', owner)).body.find((i: any) => i.id === inv.body.id);
+    expect([back.calc.gst, back.calc.tax, back.calc.intra]).toEqual([true, 3600, true]);
   });
 });

@@ -65,7 +65,7 @@ const EMAIL = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
  * on the public sign-up page (`account`), the first step also creates your sign-in.
  */
 export function OrgWizard({ onClose, account = false }: { onClose: () => void; account?: boolean }) {
-  const [ob, setOb] = useState({ step: 0, name: '', slug: '', slugTouched: false, currency: 'INR', fy: 'April', le: '', gstin: '', addr: '', inv: 'INV', qt: 'QT', pattern: PATTERNS[0][0],
+  const [ob, setOb] = useState({ step: 0, name: '', slug: '', slugTouched: false, currency: 'INR', fy: 'April', le: '', gst: true, gstin: '', state: '', addr: '', inv: 'INV', qt: 'QT', pattern: PATTERNS[0][0],
     invites: [{ email: '', role: 'Project manager' }, { email: '', role: 'Finance' }], you: '', email: '', password: '', err: '', busy: false });
   const set = (patch: Partial<typeof ob>) => setOb(o => ({ ...o, ...patch, err: '' }));
   const g = ob.gstin; const gs = STATE_CODES[g.slice(0, 2)];
@@ -84,14 +84,14 @@ export function OrgWizard({ onClose, account = false }: { onClose: () => void; a
       }
       try { const r = await api<{ ok: boolean }>(`signup/slug/${encodeURIComponent(ob.slug)}`); if (!r.ok) return err(`${ob.slug}.bos.app is taken. Try another.`); } catch { /* checked again on create */ }
     }
-    if (ob.step === 1) { if (!ob.le.trim()) return err('Enter the registered name.'); if (g.length !== 15 || !gs) return err('Enter a valid 15-character GSTIN.'); }
+    if (ob.step === 1) { if (!ob.le.trim()) return err('Enter the registered name.'); if (ob.gst ? g.length !== 15 || !gs : !ob.state) return err(ob.gst ? 'Enter a valid 15-character GSTIN.' : 'Pick your state.'); }
     if (ob.step === 2 && (!ob.inv || !ob.qt)) return err('Both prefixes are needed.');
     if (ob.step < 3) return setOb(o => ({ ...o, step: o.step + 1, err: '' }));
     const bad = emails.find(m => !EMAIL.test(m)); if (bad) return err(`${bad} isn’t a valid email address.`);
     setOb(o => ({ ...o, busy: true, err: '' }));
     try {
       const r = await api<{ message: string }>('signup', { body: {
-        name: ob.name.trim(), slug: ob.slug, currency: ob.currency, fy: ob.fy, entity: { name: ob.le.trim(), gstin: g, address: ob.addr.trim() },
+        name: ob.name.trim(), slug: ob.slug, currency: ob.currency, fy: ob.fy, entity: { name: ob.le.trim(), gst: ob.gst, gstin: ob.gst ? g : '', state: ob.state, address: ob.addr.trim() },
         numbering: { inv: ob.inv, qt: ob.qt, pattern: ob.pattern }, invites: ob.invites.filter(x => x.email.trim()),
         ...(account ? { account: { name: ob.you.trim(), email: ob.email.trim().toLowerCase(), password: ob.password } } : {}),
       } });
@@ -149,9 +149,12 @@ export function OrgWizard({ onClose, account = false }: { onClose: () => void; a
                 </>}
               </>}
               {ob.step === 1 && <>
-                <label style={lbl}>Registered name<input autoFocus style={input} value={ob.le} placeholder="As on your GST certificate" onChange={e => set({ le: e.target.value })} /></label>
-                <label style={lbl}>GSTIN<input className="mono" style={{ ...input, letterSpacing: '.02em' }} value={g} placeholder="15 characters" maxLength={15} onChange={e => set({ gstin: e.target.value.toUpperCase().replace(/\s/g, '').slice(0, 15) })} />
+                <label style={lbl}>Registered name<input autoFocus style={input} value={ob.le} placeholder={ob.gst ? 'As on your GST certificate' : 'Your business name'} onChange={e => set({ le: e.target.value })} /></label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 14, cursor: 'pointer' }}><input type="checkbox" checked={!ob.gst} onChange={e => set({ gst: !e.target.checked })} style={{ width: 18, height: 18, accentColor: '#0052ff' }} />Not registered for GST <span style={{ color: '#64748b' }}>— plain invoices, no tax</span></label>
+                {ob.gst ? <label style={lbl}>GSTIN<input className="mono" style={{ ...input, letterSpacing: '.02em' }} value={g} placeholder="15 characters" maxLength={15} onChange={e => set({ gstin: e.target.value.toUpperCase().replace(/\s/g, '').slice(0, 15) })} />
                   <span style={{ fontSize: 13, fontWeight: 400, color: g.length === 15 ? (gs ? '#047857' : '#be123c') : '#64748b' }}>{gHint}</span></label>
+                  : <label style={lbl}>State<select style={input} value={ob.state} onChange={e => set({ state: e.target.value })}><option value="">Pick a state…</option>{Object.entries(STATE_CODES).sort((a, b) => a[1].localeCompare(b[1])).map(([c, n]) => <option key={c} value={c}>{n}</option>)}</select>
+                    <span style={{ fontSize: 13, fontWeight: 400, color: '#64748b' }}>You can switch GST on later in Settings → Legal entities, once you register.</span></label>}
                 <label style={lbl}>Registered address<textarea rows={2} value={ob.addr} placeholder="Prints on every quotation and invoice" onChange={e => set({ addr: e.target.value })} style={{ border: '1px solid #cbd5e1', borderRadius: 8, padding: '10px 12px', fontSize: 14, fontWeight: 400, fontFamily: 'inherit', resize: 'vertical', outlineColor: '#0052ff' }} /></label>
                 <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start', padding: '12px 14px', borderRadius: 10, background: '#f8fafc', border: '1px solid #e2e8f0', fontSize: 14, color: '#334155' }}><Icon name="info" size={16} style={{ color: '#64748b', marginTop: 2 }} /><span style={{ textWrap: 'pretty' as any }}>Registered in more than one state? Each GSTIN is its own entity with its own invoice series. Add the others later in Settings → Legal entities.</span></div>
               </>}
