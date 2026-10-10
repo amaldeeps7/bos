@@ -166,7 +166,7 @@ export class PaymentsController {
     });
     await this.audit.log(who, `Recorded ${no} against ${inv.no}${who.demo ? ` (demo, by ${me.name})` : ''}`, 'icon-wallet', 'payment');
     const project = inv.projectId ? await this.prisma.project.findUnique({ where: { id: inv.projectId } }) : null;
-    await this.notify.send([inv.byId, project?.ownerId], 'icon-wallet', `${inv.customer.name} paid ${inr(amt)} against ${inv.no}`, '/payments', who.id);
+    await this.notify.send([inv.byId, project?.ownerId], 'icon-wallet', `${inv.customer.name} paid ${inr(amt)} against ${inv.no}`, `/invoices/${inv.id}`, who.id);
     return { message: `${no} recorded — ${inr(amt)} against ${inv.no}.${full ? ' Paid in full.' : ''}` };
   }
 

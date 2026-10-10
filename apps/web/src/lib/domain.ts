@@ -14,7 +14,7 @@ export const SCREENS: Record<string, { title: string; group: string }> = {
   credits: { title: 'Credit notes', group: 'Finance' }, customers: { title: 'Customers', group: 'Sales' }, customer: { title: 'Customer', group: 'Sales · Customers' },
   quotes: { title: 'Quotations', group: 'Sales' }, quote: { title: 'Quotation', group: 'Sales · Quotations' }, invoices: { title: 'Invoices', group: 'Finance' },
   invoice: { title: 'Invoice', group: 'Finance · Invoices' }, payments: { title: 'Payments', group: 'Finance' }, assets: { title: 'Assets', group: 'Delivery' },
-  reports: { title: 'Reports', group: 'Insights' }, qeditor: { title: 'Quotation', group: 'Sales · Quotations' }, ieditor: { title: 'Invoice', group: 'Finance · Invoices' },
+  reports: { title: 'Reports', group: 'Insights' }, notifications: { title: 'Notifications', group: 'Home' }, qeditor: { title: 'Quotation', group: 'Sales · Quotations' }, ieditor: { title: 'Invoice', group: 'Finance · Invoices' },
 };
 
 /** Works out which screen a URL shows, and the record id when it has one. */

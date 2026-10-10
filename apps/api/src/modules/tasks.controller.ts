@@ -65,7 +65,7 @@ export class TasksController {
         events: { create: [{ userId: me.id, kind: 'sys', text: b.fromMeeting ? 'created this task from a meeting' : 'created this task' }] },
       } });
     });
-    await this.notify.send([assigneeId], 'icon-list-checks', `${me.name.split(' ')[0]} assigned you ${t.title}`, '/tasks', me.id);
+    await this.notify.send([assigneeId], 'icon-list-checks', `${me.name.split(' ')[0]} assigned you ${t.title}`, `/tasks?task=${t.id}`, me.id);
     return this.out(me, t.id);
   }
 
@@ -83,7 +83,7 @@ export class TasksController {
       const u = await this.prisma.membership.findUnique({ where: { id: String(b.assigneeId) } });
       if (!u || u.status !== 'Active') throw new BadRequestException('Pick an active person');
       data.assignee = { connect: { id: u.id } }; log.push('reassigned to ' + u.name);
-      await this.notify.send([u.id], 'icon-list-checks', `${me.name.split(' ')[0]} assigned you ${t.title}`, '/tasks', me.id);
+      await this.notify.send([u.id], 'icon-list-checks', `${me.name.split(' ')[0]} assigned you ${t.title}`, `/tasks?task=${t.id}`, me.id);
     }
     if (log.length) data.events = { create: log.map(text => ({ userId: me.id, kind: 'sys', text })) };
     await this.prisma.task.update({ where: { id }, data });
@@ -95,7 +95,7 @@ export class TasksController {
     const t = await this.get(me, id);
     const text = str(b.text, 'Comment', { required: true, max: 5000 }).trim();
     await this.prisma.taskEvent.create({ data: { taskId: id, userId: me.id, kind: 'comment', text } });
-    await this.notify.send([t.assigneeId, t.reporterId], 'icon-message-square', `${me.name.split(' ')[0]} commented on ${t.title}`, '/tasks', me.id);
+    await this.notify.send([t.assigneeId, t.reporterId], 'icon-message-square', `${me.name.split(' ')[0]} commented on ${t.title}`, `/tasks?task=${t.id}`, me.id);
     // email people who have "Comments and mentions" switched on
     const to = await this.prisma.membership.findMany({ where: { id: { in: [t.assigneeId, t.reporterId].filter(x => x && x !== me.id) as string[] }, status: 'Active' } });
     const emails = to.filter(u => prefsOf(u.prefs).mention).map(u => u.email);

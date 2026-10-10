@@ -84,7 +84,7 @@ export class SchedulerService implements OnModuleInit {
       for (const u of people) {
         if (!prefsOf(u.prefs).remind || !(await this.redis.once(`bos:remind:${m.id}:${m.start}:${u.id}`, 86400))) continue;
         const text = `“${m.title}” starts at ${fmtT(m.start)}${m.link ? ` — join: ${m.link}` : ` · ${m.loc}`}`;
-        await this.notify.send([u.id], 'icon-calendar', text, '/meetings');
+        await this.notify.send([u.id], 'icon-calendar', text, `/meetings?meeting=${m.id}`);
         await this.mail.send({ to: u.email, subject: `In ${Math.round((m.start - now) * 60)} min: ${m.title}`, text: `${text}\n\nWhere: ${m.loc}${m.link ? `\nJoin: ${m.link}` : ''}`, html: htmlOf(`${text}\n\nWhere: ${m.loc}${m.link ? `\nJoin: ${m.link}` : ''}`), kind: 'reminder-meeting', ref: m.id, userId: u.id });
       }
     }

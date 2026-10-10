@@ -106,11 +106,14 @@ export class SessionService {
    */
   async refresh(req: Request, res: Response, p: TokenPayload, ttl: number) {
     const now = Math.floor(Date.now() / 1000);
+    const info = () => ({ seen: new Date().toISOString(), device: describeAgent(String(req.headers['user-agent'] || '')), ip: req.ip || '', org: p.org });
+    // A new session: note its browser and address on its first request (once), for the session list.
+    if (p.sid && p.iat && now - p.iat < 120 && (await this.redis.once(`bos:sesstrack:${p.sid}`, 600))) await this.track(p.sub, p.sid, info());
     if (!p.sid || !p.iat || now - p.iat < REFRESH_AFTER || !req.cookies?.[COOKIE]) return;
     const { iat: _i, exp: _e, ...rest } = p;
     const token = await this.jwt.signAsync(rest, { expiresIn: ttl });
     res.cookie(COOKIE, token, { httpOnly: true, sameSite: 'lax', secure: secureCookies(), maxAge: ttl * 1000, path: '/' });
-    await this.track(p.sub, p.sid, { seen: new Date().toISOString(), device: describeAgent(String(req.headers['user-agent'] || '')), ip: req.ip || '', org: p.org });
+    await this.track(p.sub, p.sid, info());
   }
 
   /**

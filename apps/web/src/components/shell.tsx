@@ -1,6 +1,7 @@
 'use client';
 import { ReactNode, useEffect, useState } from 'react';
-import { signOut } from '@/lib/api';
+import { useQueryClient } from '@tanstack/react-query';
+import { api, signOut } from '@/lib/api';
 import { usePathname, useRouter } from 'next/navigation';
 import { diffDays } from '@bos/shared';
 import { useAct, useApp, useQ } from '@/lib/app';
@@ -36,7 +37,10 @@ export function AppShell({ children }: { children: ReactNode }) {
   const waiting = approvals.filter(a => a.status === 'waiting').length;
   const meetings = useQ<Meeting[]>('meetings').data || [];
   const leftToday = meetings.filter(m => diffDays(m.date, today) === 0 && m.start + m.dur > now).length;
-  const notifs = useQ<Notification[]>('notifications').data || [];
+  const qc = useQueryClient();
+  // The bell checks for new notifications every 30 seconds while the tab is open.
+  const notifs = useQ<Notification[]>('notifications', true, 30_000).data || [];
+  const openNotif = (n: Notification) => { if (!n.read) void api(`notifications/${n.id}/read`, { body: {} }).then(() => qc.invalidateQueries({ queryKey: ['notifications'] })); if (n.link) go(n.link); else setUi({ notifOpen: false }); };
   const unread = notifs.some(n => !n.read);
   const act = useAct();
   const title = useTitle();
@@ -44,6 +48,9 @@ export function AppShell({ children }: { children: ReactNode }) {
   const canAi = can('ai');
   const aiOpen = canAi && (ui.aiOpen ?? (!isMobile && wide));
   const [more, setMore] = useState(false);
+  // Offline: say so, rather than letting saves fail silently.
+  const [offline, setOffline] = useState(false);
+  useEffect(() => { const up = () => setOffline(!navigator.onLine); up(); window.addEventListener('online', up); window.addEventListener('offline', up); return () => { window.removeEventListener('online', up); window.removeEventListener('offline', up); }; }, []);
   const go = (href: string) => { setMore(false); setUi({ notifOpen: false, aiOpen: isMobile ? false : ui.aiOpen }); router.push(href); document.querySelector('main')?.scrollTo(0, 0); };
   const item = (id: string, href: string, label: string, icon: string, count?: number) => ({ id, href, label, icon, count, active: screen === id || parent[screen] === id });
   const groups = fresh ? [{ label: '', items: [item('setup', '/setup', 'Get started', 'icon-rocket')] }] : [
@@ -145,7 +152,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                 </div>
                 <div style={{ maxHeight: 420, overflowY: 'auto' }}>
                   {notifs.map(n => (
-                    <button key={n.id} onClick={() => n.link && go(n.link)} className="row-btn" style={{ display: 'flex', gap: 12, padding: '12px 16px', background: n.read ? '#fff' : '#fbfdff' }}>
+                    <button key={n.id} onClick={() => openNotif(n)} className="row-btn" style={{ display: 'flex', gap: 12, padding: '12px 16px', background: n.read ? '#fff' : '#fbfdff' }}>
                       <Icon name={n.icon} size={16} style={{ color: '#64748b', marginTop: 2 }} />
                       <div style={{ minWidth: 0 }}>
                         <p style={{ margin: 0, fontSize: 14, lineHeight: 1.4, fontWeight: n.read ? 400 : 500 }}>{n.text}</p>
@@ -155,6 +162,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                   ))}
                   {!notifs.length && <p style={{ margin: 0, padding: 16, fontSize: 14, color: '#64748b' }}>You're all caught up.</p>}
                 </div>
+                <button onClick={() => go('/notifications')} style={{ width: '100%', padding: '10px 16px', border: 0, borderTop: '1px solid #e2e8f0', background: '#f8fafc', color: '#0052ff', fontSize: 13, fontWeight: 500, cursor: 'pointer', borderRadius: '0 0 12px 12px' }}>See all notifications</button>
               </div>
             )}
           </header>
@@ -166,6 +174,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             </div>
           )}
 
+          {offline && <div role="alert" style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 8, padding: '8px 20px', background: '#fffbeb', borderBottom: '1px solid rgba(180,83,9,.2)', color: '#92400e', fontSize: 14 }}><Icon name="wifi-off" size={15} />You’re offline. Changes won’t save until the connection is back.</div>}
           <main style={{ flex: 1, overflowY: 'auto', overscrollBehavior: 'contain' }} onClick={() => ui.notifOpen && setUi({ notifOpen: false })}>
             <div style={{ maxWidth: 1240, margin: '0 auto', padding: isMobile ? '18px 16px 28px' : '28px 32px 48px', display: 'flex', flexDirection: 'column', gap: isMobile ? 16 : 20 }}>
               {allowed ? children : null}

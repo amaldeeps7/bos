@@ -950,3 +950,27 @@ describe('account: email, photo, membership', () => {
     expect(await db.account.findUnique({ where: { email: 'arjun@democonsulting.in' } })).toBeNull();
   });
 });
+
+describe('notifications', () => {
+  const http = () => request(app.getHttpServer());
+  it('links to the item, marks one read, and pages through older ones', async () => {
+    const pm = await login('priya@democonsulting.in'); const rohan = await login('rohan@democonsulting.in');
+    const project = (await http().get('/api/projects').set('Cookie', pm)).body[0];
+    const rid = (await http().get('/api/auth/me').set('Cookie', rohan)).body.user.id;
+    const t = (await http().post('/api/tasks').set('Cookie', pm).send({ title: 'Check the deck', projectId: project.id, assigneeId: rid, due: '2026-12-01' }).expect(201)).body;
+    const bell = (await http().get('/api/notifications').set('Cookie', rohan).expect(200)).body;
+    const n = bell.find((x: any) => x.text.includes('Check the deck'));
+    expect(n.link).toBe(`/tasks?task=${t.id}`); expect(n.read).toBe(false);
+    await http().post(`/api/notifications/${n.id}/read`).set('Cookie', rohan).expect(200);
+    expect((await http().get('/api/notifications').set('Cookie', rohan)).body.find((x: any) => x.id === n.id).read).toBe(true);
+    await http().post(`/api/notifications/${n.id}/read`).set('Cookie', pm).expect(200); // someone else's: no effect, no error
+    const rid2 = await db.membership.findUniqueOrThrow({ where: { id: rid } });
+    await db.notification.createMany({ data: Array.from({ length: 35 }, (_, i) => ({ orgId: rid2.orgId, userId: rid, icon: 'icon-bell', text: `Old ${i}`, createdAt: new Date(Date.now() - (i + 1) * 3600_000) })) });
+    const p1 = (await http().get('/api/notifications/all').set('Cookie', rohan).expect(200)).body;
+    expect(p1.rows).toHaveLength(30); expect(p1.more).toBe(true); expect(p1.unread).toBeGreaterThanOrEqual(35);
+    const p2 = (await http().get(`/api/notifications/all?before=${p1.rows.at(-1).id}`).set('Cookie', rohan).expect(200)).body;
+    expect(p2.rows.length).toBeGreaterThan(0); expect(p2.rows.some((r: any) => p1.rows.some((x: any) => x.id === r.id))).toBe(false);
+    const unread = (await http().get('/api/notifications/all?unread=1').set('Cookie', rohan)).body;
+    expect(unread.rows.every((r: any) => !r.read)).toBe(true);
+  });
+});

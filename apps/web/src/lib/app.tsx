@@ -33,8 +33,9 @@ function useWidth() {
   return w;
 }
 
-export function useQ<T>(path: string | null, enabled = true) {
-  return useQuery<T>({ queryKey: [path], queryFn: () => api<T>(path!), enabled: !!path && enabled, staleTime: 15_000 });
+/** Cached GET. `poll` (ms) refreshes it on a timer while the tab is visible (e.g. notifications). */
+export function useQ<T>(path: string | null, enabled = true, poll?: number) {
+  return useQuery<T>({ queryKey: [path], queryFn: () => api<T>(path!), enabled: !!path && enabled, staleTime: 15_000, refetchInterval: poll, refetchIntervalInBackground: false });
 }
 
 /** Runs a mutation, shows the server's message as a toast and refreshes every query. */

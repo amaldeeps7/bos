@@ -3,7 +3,7 @@ import { PrismaService } from '../core/prisma.service';
 import { AccessService } from '../core/access.service';
 import { AuditService } from '../core/audit.service';
 import type { AuthUser } from '../core/auth.types';
-import { toDate } from '../core/util';
+import { toDate, docLink } from '../core/util';
 import { orgId } from '../core/tenant';
 
 @Injectable()
@@ -40,7 +40,7 @@ export class ApprovalsService {
         const n = await tx.asset.updateMany({ where: { code: p.assetCode, status: 'AVAILABLE' }, data: { status: 'IN_USE', projectId: p.projectId || null, holderId: p.holderId || null } });
         if (!n.count) throw new BadRequestException(`${a.ref} has been assigned or taken out of the pool since this was requested.`);
       }
-      await tx.notification.create({ data: { userId: a.requestedById, icon: ok ? 'icon-badge-check' : 'icon-undo-2', text: `${by} ${ok ? 'approved' : 'sent back'} ${a.ref}`, link: '/approvals' } });
+      await tx.notification.create({ data: { userId: a.requestedById, icon: ok ? 'icon-badge-check' : 'icon-undo-2', text: `${by} ${ok ? 'approved' : 'sent back'} ${a.ref}`, link: docLink(a.docType, a.docId) } });
     });
     const area = a.docType === 'quote' ? 'quote' : a.docType === 'invoice' ? 'invoice' : 'project';
     await this.audit.log(actor, `${by} ${ok ? 'approved' : 'sent back'} ${a.ref}${actor.id !== me.id ? ` (demo, by ${me.name})` : ''}`, ok ? 'icon-badge-check' : 'icon-undo-2', area);

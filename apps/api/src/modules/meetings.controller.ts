@@ -99,7 +99,7 @@ export class MeetingsController {
     const m = await this.prisma.meeting.create({ data: { ...(data as any), guests: cleanGuests(b.guests), organizerId: me.id, attendees: { create: who.map(userId => ({ userId })) } }, include });
     const sent = await this.invite(m, me, 'REQUEST');
     const { today } = await this.orgs.ctx();
-    await this.notify.send(who, 'icon-calendar', `${me.name.split(' ')[0]} invited you to ${m.title} · ${dayLabel(d(m.date), today)}, ${fmtT(m.start)}`, '/meetings', me.id);
+    await this.notify.send(who, 'icon-calendar', `${me.name.split(' ')[0]} invited you to ${m.title} · ${dayLabel(d(m.date), today)}, ${fmtT(m.start)}`, `/meetings?meeting=${m.id}`, me.id);
     return { ...map(m), invited: sent.count, emailed: sent.ok, emailError: sent.ok ? undefined : (sent as any).error };
   }
 
@@ -128,7 +128,7 @@ export class MeetingsController {
     }
     if (moved) {
       const { today } = await this.orgs.ctx();
-      await this.notify.send(m.attendees.map(a => a.userId), 'icon-calendar-clock', `${m.title} moved to ${dayLabel(d(m.date), today)}, ${fmtT(m.start)}`, '/meetings', me.id);
+      await this.notify.send(m.attendees.map(a => a.userId), 'icon-calendar-clock', `${m.title} moved to ${dayLabel(d(m.date), today)}, ${fmtT(m.start)}`, `/meetings?meeting=${m.id}`, me.id);
     }
     return { ...map(m), moved, emailed };
   }
@@ -168,7 +168,7 @@ export class MeetingsController {
       await tx.actionItem.update({ where: { id: aid }, data: { taskId: t.id } });
       return t;
     });
-    await this.notify.send([a.assigneeId], 'icon-list-checks', `${me.name.split(' ')[0]} assigned you ${t.title}`, '/tasks', me.id);
+    await this.notify.send([a.assigneeId], 'icon-list-checks', `${me.name.split(' ')[0]} assigned you ${t.title}`, `/tasks?task=${t.id}`, me.id);
     return { meeting: map(await this.get(me, id)), taskId: t.id, key: 'TSK-' + t.key };
   }
 }

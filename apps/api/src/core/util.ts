@@ -37,3 +37,7 @@ export const gstParty = (b: { gstin?: unknown; state?: unknown }, needGstin: boo
   if (!code) throw new BadRequestException('Pick the state. It sets the place of supply.');
   return { gstin: '', state: code };
 };
+
+/** Where a notification about an approval should open: the document itself when there is one. */
+export const docLink = (docType?: string | null, docId?: string | null) =>
+  docType === 'invoice' && docId ? `/invoices/${docId}` : docType === 'quote' && docId ? `/quotes/${docId}` : '/approvals';

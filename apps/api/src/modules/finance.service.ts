@@ -5,7 +5,7 @@ import { PrismaService } from '../core/prisma.service';
 import { OrgService } from '../core/org.service';
 import { NotifyService } from '../core/notify.service';
 import { AuditService } from '../core/audit.service';
-import { d, num, str } from '../core/util';
+import { d, docLink, num, str } from '../core/util';
 
 export type Ctx = Awaited<ReturnType<OrgService['ctx']>> & {
   custState: Map<string, string | undefined>; entityState: Map<string, string | undefined>; entityName: Map<string, string>; paid: Map<string, number>; credited: Map<string, number>;
@@ -100,7 +100,7 @@ export class FinanceService {
         : await this.approverFor('project.change_owner', a.requestedById); // milestone dates: someone who can take over projects
       if (!next) continue;
       await this.prisma.approval.update({ where: { id: a.id }, data: { approverId: next.id } });
-      await this.notify.send([next.id], 'icon-badge-check', `${a.ref} needs your approval (it was waiting on ${fromName})`, '/approvals');
+      await this.notify.send([next.id], 'icon-badge-check', `${a.ref} needs your approval (it was waiting on ${fromName})`, docLink(a.docType, a.docId));
       moved++;
     }
     return moved;
@@ -114,7 +114,7 @@ export class FinanceService {
   async requestApproval(tx: Prisma.TransactionClient, a: { kind: string; docType?: string; docId?: string; ref: string; title: string; detail: string; amount?: number; payload?: any; requestedBy: { id: string; name: string }; approverId: string }) {
     await tx.approval.updateMany({ where: { docType: a.docType, docId: a.docId, status: 'PENDING' }, data: { status: 'REJECTED', decidedAt: new Date() } });
     const ap = await tx.approval.create({ data: { kind: a.kind, docType: a.docType, docId: a.docId, ref: a.ref, title: a.title, detail: a.detail, amount: a.amount, payload: a.payload, requestedById: a.requestedBy.id, approverId: a.approverId } });
-    await tx.notification.create({ data: { userId: a.approverId, icon: 'icon-badge-check', text: `${a.requestedBy.name.split(' ')[0]} asked you to approve ${a.ref}`, link: '/approvals' } });
+    await tx.notification.create({ data: { userId: a.approverId, icon: 'icon-badge-check', text: `${a.requestedBy.name.split(' ')[0]} asked you to approve ${a.ref}`, link: docLink(a.docType, a.docId) } });
     return ap;
   }
 

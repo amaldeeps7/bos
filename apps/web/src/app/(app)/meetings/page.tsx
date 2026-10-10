@@ -19,7 +19,9 @@ export default function Meetings() {
   const projects = useQ<Project[]>('projects').data || [];
   const newMeeting = useOpenNewMeeting();
   const [tab, setTab] = useState<Tab>('upcoming');
-  const params = useSearchParams(); useEffect(() => { const t = params.get('tab'); if (t === 'cancelled' || t === 'past' || t === 'follow') setTab(t); }, [params]);
+  const params = useSearchParams();
+  // Links from notifications: ?tab=cancelled, or ?meeting=<id> opens that meeting.
+  useEffect(() => { const t = params.get('tab'); if (t === 'cancelled' || t === 'past' || t === 'follow') setTab(t); const m = params.get('meeting'); if (m) setUi({ meetId: m, taskId: null }); }, [params, setUi]);
   // Cancelled meetings (last 90 days) are kept for the record, outside the main list.
   const cancelled = useQ<(Meeting & { cancelledAt: string })[]>('meetings/cancelled').data || [];
   const past = (m: Meeting) => isPast(m, today, now);
