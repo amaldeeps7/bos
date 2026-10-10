@@ -1,7 +1,7 @@
 'use client';
 import { Fragment, ReactNode, useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { INVOICE_STATUS, QUOTE_STATUS, UNISSUED, Calc, Line, calc, diffDays, fmtD, gstText, inr } from '@bos/shared';
+import { INVOICE_STATUS, QUOTE_STATUS, UNISSUED, Calc, Line, calc, diffDays, fmtD, gstText, inr, stateOf } from '@bos/shared';
 import { useAct, useApp, useQ } from '@/lib/app';
 import { api, ApiError } from '@/lib/api';
 import { editorStore } from '@/lib/editor-store';
@@ -54,7 +54,8 @@ export function DocView({ kind, id }: { kind: 'quote' | 'invoice'; id: string })
   if (!doc) return <p style={{ color: '#64748b' }}>Loading…</p>;
   const c = customers.find(x => x.id === doc.customerId); const k = doc.calc;
   const tpl = me.org.templates?.[kind] || { title: kind === 'quote' ? 'Quotation' : 'Tax invoice', accent: '#0052ff' };
-  const le = me.org.entity;
+  // The entity that issued this document (its GSTIN and bank details print on it).
+  const le = me.entities.find(e => e.id === doc.entityId) || me.org.entity;
   const A: Act[] = []; const add = (label: string, icon: string, kind_: Act['kind'], go: () => void) => A.push({ label, icon, kind: kind_, go });
   const path = kind === 'quote' ? 'quotes' : 'invoices';
   const run = (action: string, body: object = {}) => act(`${path}/${doc.id}/${action}`, body);
@@ -194,15 +195,18 @@ export function DocEditor({ kind, id }: { kind: 'quote' | 'invoice'; id?: string
   const docs = useQ<(Quote | Invoice)[]>(id ? (kind === 'quote' ? 'quotes' : 'invoices') : null).data;
   const doc = id ? docs?.find(x => x.id === id) : undefined;
   const isQ = kind === 'quote';
-  const [ed, setEd] = useState<{ cust: string; title: string; days: number; lines: Line[]; notes: string } | null>(null);
+  const [ed, setEd] = useState<{ cust: string; entity: string; title: string; days: number; lines: Line[]; notes: string } | null>(null);
+  const defEntity = (me.entities.find(e => e.isDefault) || me.entities[0])?.id || '';
   useEffect(() => {
     if (ed || !customers.length || (id && !doc)) return;
     const c = customers.find(x => x.id === (doc?.customerId || params.get('customer'))) || customers[0];
-    setEd({ cust: c.id, title: doc?.title || '', notes: doc?.notes || '', lines: doc ? doc.lines.map(l => ({ ...l })) : [blankLine()],
+    setEd({ cust: c.id, entity: doc?.entityId || defEntity, title: doc?.title || '', notes: doc?.notes || '', lines: doc ? doc.lines.map(l => ({ ...l })) : [blankLine()],
       days: doc ? diffDays(isQ ? (doc as Quote).validUntil : (doc as Invoice).due, doc.date) : isQ ? 30 : c.terms });
   }, [customers, doc, id, ed, isQ, params]);
   const ec = customers.find(x => x.id === ed?.cust);
-  const k = useMemo(() => ed ? calc(ed.lines, ec?.state, me.org.ourState, me.org.sacRates) : null, [ed, ec, me.org]);
+  // GST follows the issuing entity's state: same state as the customer → CGST + SGST, otherwise IGST.
+  const ent = me.entities.find(e => e.id === ed?.entity);
+  const k = useMemo(() => ed ? calc(ed.lines, ec?.state, (ent && stateOf(ent.gstin)) || me.org.ourState, me.org.sacRates) : null, [ed, ec, ent, me.org]);
   useEffect(() => { editorStore.lines = ed?.lines || []; return () => { editorStore.lines = []; }; }, [ed]);
   if (!ed || !k) return <p style={{ color: '#64748b' }}>Loading…</p>;
   const limit = me.org.discLimit; const revise = !!doc && doc.status !== 'DRAFT';
@@ -210,7 +214,7 @@ export function DocEditor({ kind, id }: { kind: 'quote' | 'invoice'; id?: string
   const back = () => router.push(id ? `/${isQ ? 'quotes' : 'invoices'}/${id}` : `/${isQ ? 'quotes' : 'invoices'}`);
   const save = async (submit: boolean) => {
     try {
-      const r = await api<{ id: string; message: string }>(isQ ? 'quotes' : 'invoices', { body: { id, customerId: ed.cust, title: ed.title, days: ed.days, lines: ed.lines, notes: ed.notes, submit } });
+      const r = await api<{ id: string; message: string }>(isQ ? 'quotes' : 'invoices', { body: { id, customerId: ed.cust, entityId: ed.entity, title: ed.title, days: ed.days, lines: ed.lines, notes: ed.notes, submit } });
       await qc.invalidateQueries(); toast(r.message); router.push(`/${isQ ? 'quotes' : 'invoices'}/${r.id}`);
     } catch (e) { toast(e instanceof ApiError ? e.message : 'Could not save.'); }
   };
@@ -225,6 +229,7 @@ export function DocEditor({ kind, id }: { kind: 'quote' | 'invoice'; id?: string
       <label className="label">Customer<select className="select" value={ed.cust} onChange={e => { const nc = customers.find(x => x.id === e.target.value)!; setEd({ ...ed, cust: nc.id, days: isQ ? ed.days : nc.terms }); }}>{customers.map(x => <option key={x.id} value={x.id}>{x.name}</option>)}</select></label>
       <label className="label">{isQ ? 'Quotation title' : 'Invoice title'}<input className="input" value={ed.title} onChange={e => setEd({ ...ed, title: e.target.value })} placeholder="e.g. Parent app — phase 1" /></label>
       <label className="label">{isQ ? 'Valid for' : 'Payment terms'}<select className="select" value={String(ed.days)} onChange={e => setEd({ ...ed, days: +e.target.value })}>{opts.map(n => <option key={n} value={String(n)}>{isQ ? `${n} days` : `Net ${n}`}</option>)}</select></label>
+      {me.entities.length > 1 && <label className="label">Issued by<select className="select" value={ed.entity} onChange={e => setEd({ ...ed, entity: e.target.value })}>{me.entities.map(le => <option key={le.id} value={le.id}>{le.name} · {stateOf(le.gstin) || le.gstin.slice(0, 2)}</option>)}</select></label>}
       <div className="label">Place of supply<span className="ellipsis" style={{ height: 42, display: 'flex', alignItems: 'center', padding: '0 12px', borderRadius: 8, background: '#f8fafc', border: '1px solid #e2e8f0', fontWeight: 400, color: '#334155' }}>{ec?.state} — {gstText(k.intra)}</span></div>
     </Card>
     <Card>

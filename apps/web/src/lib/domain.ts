@@ -3,12 +3,12 @@ import { DAYS, diffDays, fmtD, addDays } from '@bos/shared';
 import type { Meeting, Project, Task } from './types';
 
 export const MOD_OF_SCREEN: Record<string, string | null> = {
-  mywork: null, tasks: 'tasks', meetings: null, approvals: 'approvals', pipeline: 'crm', projects: 'projects', project: 'projects',
+  mywork: null, setup: null, tasks: 'tasks', meetings: null, approvals: 'approvals', pipeline: 'crm', projects: 'projects', project: 'projects',
   settings: null, team: null, person: null, catalog: 'sales', credits: 'billing', customers: 'crm', customer: 'crm', quotes: 'sales', quote: 'sales',
   invoices: 'billing', invoice: 'billing', payments: 'payments', assets: 'assets', reports: 'reports', qeditor: 'sales', ieditor: 'billing',
 };
 export const SCREENS: Record<string, { title: string; group: string }> = {
-  mywork: { title: 'My Work', group: 'Home' }, tasks: { title: 'Tasks', group: 'Work' }, meetings: { title: 'Meetings', group: 'Work' },
+  mywork: { title: 'My Work', group: 'Home' }, setup: { title: 'Get started', group: 'Home' }, tasks: { title: 'Tasks', group: 'Work' }, meetings: { title: 'Meetings', group: 'Work' },
   approvals: { title: 'Approvals', group: 'Work' }, team: { title: 'Team', group: 'Work' }, person: { title: 'Profile', group: 'Work · Team' }, pipeline: { title: 'Pipeline', group: 'Sales' }, projects: { title: 'Projects', group: 'Delivery' },
   project: { title: 'Project', group: 'Delivery' }, settings: { title: 'Settings', group: 'Organisation' }, catalog: { title: 'Catalogue', group: 'Sales' },
   credits: { title: 'Credit notes', group: 'Finance' }, customers: { title: 'Customers', group: 'Sales' }, customer: { title: 'Customer', group: 'Sales · Customers' },

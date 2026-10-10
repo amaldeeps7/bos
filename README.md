@@ -21,19 +21,25 @@ cp .env.example .env          # optional: add ANTHROPIC_API_KEY
 docker compose up --build
 ```
 
-Open http://localhost:3000. The sign-in screen lists demo accounts (password `demo1234`). Priya Raman (Project manager) is the persona the design was built around.
+Open http://localhost:3000. The sign-in screen lists demo accounts (password `demo1234`). Priya Raman (Project manager) is the persona the design was built around. She also owns a second organisation, Raman Advisory (a new trial still on its Get started checklist); switch between them from the organisation menu at the top of the sidebar. "Create an organisation" on the sign-in screen signs a new organisation up.
 
 Every email the app sends lands in Mailpit at http://localhost:8025. To deliver real email, set `SMTP_URL` (and `EMAIL_FROM`) in `.env`, e.g. `smtps://user:password@smtp.example.com:465`.
 
 ### Local development
 
-Needs Node 22, pnpm 10, Postgres and Redis.
+Needs Node 22, pnpm 10, Postgres 15+ and Redis. The API connects as an application role without `BYPASSRLS`; create it once (as a superuser) and give the owner role `BYPASSRLS` for migrations and the seed:
+
+```sql
+CREATE ROLE bos_app LOGIN PASSWORD 'bos_app' NOSUPERUSER NOBYPASSRLS;
+ALTER ROLE bos BYPASSRLS;
+```
 
 ```bash
 pnpm install
-cp apps/api/.env.example apps/api/.env      # edit DATABASE_URL / REDIS_URL if needed
+cp apps/api/.env.example apps/api/.env      # DATABASE_URL = bos_app, MIGRATE_DATABASE_URL = owner
 pnpm build:shared
-pnpm --filter @bos/api prisma:dev           # create the schema
+pnpm --filter @bos/api exec prisma migrate deploy
+(cd apps/api && node prisma/app-role.js)    # grants for bos_app
 pnpm db:seed                                # load Demo Consulting (wipes the database)
 pnpm dev:api                                # http://localhost:4000/api
 pnpm dev:web                                # http://localhost:3000 (proxies /api to the API)
@@ -46,16 +52,21 @@ pnpm --filter @bos/shared build && pnpm --filter @bos/shared test   # GST, numbe
 pnpm --filter @bos/api test     # API end-to-end against Postgres (re-seeds the database)
 ```
 
-The API suite covers sign-in, permission enforcement on the API, module switches, GST by place of supply, the milestone → invoice → approval → issue → payment flow, discount-policy routing, GSTIN validation, forward-only numbering, PDF rendering, the email log, adding and inviting people, the org chart, profile permissions and reporting loops, notification switches, meeting reminders and the daily digest, meeting guests, permission-aware search, and editing projects, milestones and deals.
+The API suite runs the API as `bos_app`, so row-level security is exercised for real. It covers the multitenancy checks from the spec (two organisations with the same GSTIN and invoice numbers; another organisation's records are 404 everywhere; raw SQL with no tenant set returns nothing; concurrent invoices on two entities number independently with no gaps; module caches per organisation; a member scoped to one entity sees only its documents; no demo fallback outside a demo organisation), sign-up, export behind signed links, plan limits and closing an organisation, as well as sign-in, permission enforcement on the API, module switches, GST by place of supply, the milestone → invoice → approval → issue → payment flow, discount-policy routing, GSTIN validation, forward-only numbering, PDF rendering, the email log, adding and inviting people, the org chart, profile permissions and reporting loops, notification switches, meeting reminders and the daily digest, meeting guests, permission-aware search, and editing projects, milestones and deals.
 
 ## How it works
 
+- **Many organisations, one deployment.** Each organisation (tenant) has its own people, roles, settings, numbering, records, caches and files. Every tenant table carries `orgId`; Postgres row-level security (forced, on every tenant table) refuses rows from any other organisation, and the API connects as `bos_app`, which can't bypass it. Each request runs its queries in a transaction that first sets `app.org_id` from the session; without it, queries return nothing (and the API refuses to run them). A Prisma extension adds the organisation filter, and a member's access scope, to every query on top. Invoice/credit-note/receipt numbers are per legal entity (one series per GSTIN); quotations and projects per organisation.
+- **People and organisations.** A person signs in once (an Account) and belongs to organisations through Memberships, each with its own role, profile and access scope. The session names the organisation; switching from the organisation menu re-issues it after checking the membership. Inviting someone who already uses Business OS adds the organisation to their menu. An admin can only reset the password of someone who belongs to their organisation alone.
+- **Access to** (Settings → Users): a member can be limited to one legal entity (its quotations, invoices, payments, credit notes) or one business unit (its projects and tasks, and documents raised from them). The Owner always sees everything.
+- **Sign-up and set-up.** "Create organisation" (or the public sign-up page) asks for the organisation, its first legal entity (GSTIN), numbering and optional invitations, then lands on a Get started checklist until the Owner finishes it. Plans (Starter, Growth, Enterprise; new organisations start on a 14-day trial with Growth's limits) set how many people and entities are allowed and which modules can be switched on.
+- **Data & export.** Settings → Data & export builds a ZIP of every record as CSV and JSON plus every issued PDF, stored under `STORAGE_DIR/orgs/<orgId>/` and downloadable for 7 days through a signed link (also emailed). The Owner can close the organisation: everyone loses access at once and its data is deleted after 30 days.
 - **Permissions are enforced by the API.** Every route declares the permission it needs (`@Perm('invoice.read')`); a module switched off in Settings hides its routes for everyone. Role permissions are cached in Redis and invalidated when they change. The UI reads the same permissions to decide what to show.
 - **Approvals follow policy.** Invoices go to Finance before they can be issued; quotations with a discount above the limit (or above the large-quotation threshold) go to the Owner; nobody approves what they raised unless their role holds "approve own". Approving or rejecting from the Approvals screen updates the document.
-- **Numbers come from a locked counter** (`SELECT … FOR UPDATE`) per document type, so two people can't get the same number. Patterns support `{prefix}`, `{yyyy}`, `{yy}`, `{fy}` and `{seq}`; counters only move forward.
-- **GST** is CGST + SGST when the customer's GSTIN state matches the default issuing entity's, IGST otherwise, at the rate set per SAC code.
+- **Numbers come from a locked counter** (`SELECT … FOR UPDATE`) per document type and issuing entity, so two people can't get the same number. Patterns support `{prefix}`, `{yyyy}`, `{yy}`, `{fy}` and `{seq}`; counters only move forward.
+- **GST** is CGST + SGST when the customer's GSTIN state matches the issuing entity's (chosen per document under "Issued by" when there's more than one), IGST otherwise, at the rate set per SAC code.
 - **Audit log** is append-only; settings, access changes and document steps are written to it.
-- **Demo mode** (`DEMO_MODE=true`) adds the design's dashed buttons — "Approve as Meera (demo)", "Issue as Meera (demo)" — so one person can walk a document through steps that belong to other roles. The audit log records who clicked. Turn it off in production; then each step needs a person who holds the permission.
+- **Demo mode** (`DEMO_MODE=true`, and only in an organisation marked as the sample workspace, never one created by sign-up) adds the design's dashed buttons — "Approve as Meera (demo)", "Issue as Meera (demo)" — so one person can walk a document through steps that belong to other roles. The audit log records who clicked. Turn it off in production; then each step needs a person who holds the permission.
 - **Email.** Sending a quotation or invoice emails it to the customer's billing email with the PDF attached; credit notes, payment reminders (Settings → Reminders wording), user invitations and meeting invites (with a calendar invite that Google, Outlook and Apple Calendar understand, including updates and cancellations) all go out over SMTP. Every message is recorded with its result under Settings → Email. Without `SMTP_URL`, nothing is sent and the log says so.
 - **PDFs** for quotations, invoices and credit notes are drawn on the server from Settings → Templates: layout, accent colour, logo, SAC column, bank details, a UPI QR code for the balance due, signatory line, amount in words and terms.
 - **Search (⌘K / Ctrl K, or `/`)** looks across customers, projects, tasks, meetings, quotations, invoices, payments, credit notes, deals, assets and people — by name, document number, `TSK-123`, GSTIN or bank reference — and only returns what the searcher's role can see. With an empty box it offers quick actions and every page.
@@ -74,6 +85,11 @@ The API suite covers sign-in, permission enforcement on the API, module switches
 | Dialogs (meeting, task, customer, payment, credit note) | `apps/web/src/components/dialogs.tsx` |
 | Quotation / invoice view and editor | `apps/web/src/components/docs.tsx` |
 | Settings (all sections, permission matrix, email log) | `apps/web/src/components/settings.tsx` |
+| Organisation menu, new-organisation wizard, Get started | `apps/web/src/components/orgs.tsx` |
+| Plan & billing, Data & export, add legal entity | `apps/web/src/components/workspace.tsx` |
+| Tenant context, Prisma extension (org filter, scope, `app.org_id`) | `apps/api/src/core/tenant.ts`, `apps/api/src/core/prisma.service.ts` |
+| Row-level security, roles | `apps/api/prisma/migrations/*_tenant_rls/`, `apps/api/prisma/app-role.js` |
+| Sign-up, plan, usage, export, close | `apps/api/src/modules/orgs.controller.ts`, `apps/api/src/modules/export.service.ts` |
 | Team, profiles, your settings | `apps/web/src/app/(app)/team/`, `apps/web/src/components/team.tsx`, `apps/api/src/modules/team.controller.ts` |
 | Meeting reminders and daily digest | `apps/api/src/modules/scheduler.service.ts` |
 | Edit dialogs (project, milestone, deal, asset, payment, person) | `apps/web/src/components/forms.tsx` |
@@ -91,4 +107,8 @@ The API suite covers sign-in, permission enforcement on the API, module switches
 - The profile's "Google Calendar" row is labelled Calendar: connecting it means meeting invites arrive as calendar events by email (which Google Calendar, Outlook and Apple Calendar pick up), not a two-way sync with Google.
 - Payment reminders are sent when someone clicks "Send reminder" or "Remind overdue customers"; the schedule in Settings → Reminders isn't run automatically yet.
 - Meeting invites are sent as calendar emails rather than through a two-way Google/Outlook calendar sync.
-- One organisation per deployment.
+- Organisations are chosen by the session (the organisation menu), not by subdomain yet: the "workspace address" (`slug.bos.app`) is reserved at sign-up for that.
+- Plans are recorded and their limits enforced, but no payment provider is connected: changing plan takes effect straight away, and Plan & billing shows no subscription invoices.
+- A closed organisation can't be reopened from the app during its 30 days; that needs the platform team.
+- The design's "Connect your calendar … sync both ways with Google or Microsoft 365" step turns on calendar-invite emails; there's no two-way calendar sync.
+- Access scope narrows documents (by entity) or projects, tasks and their documents (by business unit). Customers, people, meetings and the pipeline stay visible to everyone whose role can read them.

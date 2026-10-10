@@ -178,7 +178,7 @@ export function CustomerDialog() {
     try {
       const body = { ...nc, gstin: g, terms: +nc.terms, ownerId: nc.ownerId || undefined };
       if (editing) { const r = await api<{ message: string }>(`customers/${editing.id}`, { method: 'PATCH', body }); await qc.invalidateQueries(); close(); toast(r.message); }
-      else { const r = await api<{ id: string }>('customers', { body }); await qc.invalidateQueries(); close(); router.push(`/customers/${r.id}`); toast(`${nc.name.trim()} added. You can quote them now.`); }
+      else { const r = await api<{ id: string }>('customers', { body }); await qc.invalidateQueries(); close(); if (!location.pathname.startsWith('/setup')) router.push(`/customers/${r.id}`); toast(`${nc.name.trim()} added. You can quote them now.`); }
     } catch (e) { setErr(e instanceof ApiError ? e.message : 'Could not save the customer.'); }
   };
   const archive = async () => {

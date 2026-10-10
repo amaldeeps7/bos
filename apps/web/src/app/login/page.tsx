@@ -25,6 +25,7 @@ export default function Login() {
           {err && <p style={{ margin: 0, fontSize: 14, color: '#be123c' }}>{err}</p>}
           <button className="btn btn-pri" type="submit" disabled={busy} style={{ justifyContent: 'center' }}>{busy ? 'Signing in…' : 'Sign in'}</button>
         </form>
+        <p style={{ margin: 0, fontSize: 14, color: '#64748b', textAlign: 'center' }}>New to Business OS? <a href="/signup" className="link" style={{ textDecoration: 'none' }}>Create an organisation</a></p>
         {demo.length > 0 && (
           <div className="card" style={{ overflow: 'hidden' }}>
             <div className="card-head" style={{ padding: '12px 16px' }}><p style={{ margin: 0, fontSize: 14, fontWeight: 600 }}>Demo accounts</p><p style={{ margin: '2px 0 0', fontSize: 13, color: '#64748b' }}>Password for every account: demo1234</p></div>

@@ -65,3 +65,4 @@ a:hover { color: var(--blue-hover); text-decoration: underline; }
 .person-link:hover { text-decoration: underline; }
 .chip-link:hover { border-color: #0052ff !important; color: #0052ff !important; }
 .hov-row:hover { background: #f8fafc; }
+.hov-blue:hover { background: #eef4ff !important; }

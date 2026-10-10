@@ -11,6 +11,7 @@ import { TaskPanel, MeetingPanel } from './overlays';
 import { MeetingDialog, NewTaskDialog, CustomerDialog, PaymentDialog, CreditDialog } from './dialogs';
 import { useTitle } from './title';
 import { CommandPalette } from './search';
+import { OrgMenu, OrgWizard, takeFlash } from './orgs';
 
 const navBtn = (active: boolean) => ({ display: 'flex', alignItems: 'center', gap: 12, minHeight: 42, padding: '8px 12px', border: 0, borderRadius: 8, cursor: 'pointer', fontSize: 15, width: '100%', background: active ? '#eef4ff' : 'transparent', color: active ? '#0052ff' : '#64748b', fontWeight: active ? 600 : 500 } as const);
 const Count = ({ n, small }: { n: number; small?: boolean }) => small
@@ -25,6 +26,10 @@ export function AppShell({ children }: { children: ReactNode }) {
   const canSettings = has('settings.manage') || has('role.manage');
   const allowed = can(MOD_OF_SCREEN[screen] ?? null) && (screen !== 'settings' || canSettings) && (screen !== 'qeditor' || has('quote.create')) && (screen !== 'ieditor' || has('invoice.create'));
   useEffect(() => { if (!allowed) router.replace('/'); }, [allowed, router]);
+  // A new organisation lands on Get started until its Owner finishes (or skips) the checklist.
+  const fresh = !me.org.setupDone;
+  useEffect(() => { if (fresh && screen === 'mywork') router.replace('/setup'); else if (!fresh && screen === 'setup') router.replace('/'); }, [fresh, screen, router]);
+  useEffect(() => { const m = takeFlash(); if (m) app.toast(m); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const approvals = useQ<Approval[]>(can('approvals') ? 'approvals' : null).data || [];
   const waiting = approvals.filter(a => a.status === 'waiting').length;
@@ -39,7 +44,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const aiOpen = canAi && (ui.aiOpen ?? (!isMobile && wide));
   const go = (href: string) => { setUi({ notifOpen: false, aiOpen: isMobile ? false : ui.aiOpen }); router.push(href); document.querySelector('main')?.scrollTo(0, 0); };
   const item = (id: string, href: string, label: string, icon: string, count?: number) => ({ id, href, label, icon, count, active: screen === id || parent[screen] === id });
-  const groups = [
+  const groups = fresh ? [{ label: '', items: [item('setup', '/setup', 'Get started', 'icon-rocket')] }] : [
     { label: '', items: [item('mywork', '/', 'My Work', 'icon-house'), can('tasks') && item('tasks', '/tasks', 'Tasks', 'icon-list-checks'), item('meetings', '/meetings', 'Meetings', 'icon-calendar'), item('team', '/team', 'Team', 'icon-users'), can('approvals') && item('approvals', '/approvals', 'Approvals', 'icon-badge-check', waiting)] },
     { label: 'Sales', items: [can('crm') && item('customers', '/customers', 'Customers', 'icon-building-2'), can('crm') && item('pipeline', '/pipeline', 'Pipeline', 'icon-kanban'), can('sales') && item('quotes', '/quotes', 'Quotations', 'icon-scroll-text'), can('sales') && item('catalog', '/catalog', 'Catalogue', 'icon-package')] },
     { label: 'Delivery', items: [can('projects') && item('projects', '/projects', 'Projects', 'icon-folder-kanban'), can('assets') && item('assets', '/assets', 'Assets', 'icon-laptop')] },
@@ -48,10 +53,11 @@ export function AppShell({ children }: { children: ReactNode }) {
     { label: 'Organisation', items: [canSettings && item('settings', '/settings', 'Settings', 'icon-settings-2')] },
   ].map(g => ({ ...g, items: g.items.filter(Boolean) as ReturnType<typeof item>[] })).filter(g => g.items.length);
 
-  const tabs = [item('mywork', '/', 'My Work', 'icon-house'), can('tasks') && item('tasks', '/tasks', 'Tasks', 'icon-list-checks'), item('meetings', '/meetings', 'Meetings', 'icon-calendar', leftToday),
+  const tabs = fresh ? [item('setup', '/setup', 'Get started', 'icon-rocket')] : [item('mywork', '/', 'My Work', 'icon-house'), can('tasks') && item('tasks', '/tasks', 'Tasks', 'icon-list-checks'), item('meetings', '/meetings', 'Meetings', 'icon-calendar', leftToday),
     can('projects') && item('projects', '/projects', 'Projects', 'icon-folder-kanban'), can('approvals') && item('approvals', '/approvals', 'Approvals', 'icon-badge-check', waiting)].filter(Boolean) as ReturnType<typeof item>[];
 
-  const orgIni = me.org.name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
+  const orgIni = me.org.ini || me.org.name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
+  const toggleOrgs = () => setUi({ orgMenu: !ui.orgMenu, notifOpen: false });
   const myIni = me.user.name.split(' ').map(w => w[0]).join('').slice(0, 2);
   const onMe = screen === 'person' && screenOf(path).id === me.user.id;
 
@@ -60,12 +66,15 @@ export function AppShell({ children }: { children: ReactNode }) {
       <div style={{ width: '100%', height: '100%', display: 'flex', position: 'relative', overflow: 'hidden' }}>
         {!isMobile && (
           <nav style={{ width: 248, flex: 'none', display: 'flex', flexDirection: 'column', borderRight: '1px solid #e2e8f0', background: '#fafafa', height: '100%' }}>
-            <div style={{ height: 64, flex: 'none', display: 'flex', alignItems: 'center', gap: 10, padding: '0 16px', borderBottom: '1px solid #e2e8f0' }}>
-              <span style={{ width: 32, height: 32, borderRadius: 8, backgroundImage: 'linear-gradient(135deg,#0052ff,#4d7cff)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, fontWeight: 600 }}>{orgIni}</span>
-              <span style={{ minWidth: 0 }}>
-                <span style={{ display: 'block', fontSize: 15, fontWeight: 600, lineHeight: 1.2 }}>{me.org.name}</span>
-                <span style={{ display: 'block', fontSize: 12, color: '#64748b', lineHeight: 1.2 }}>Business OS</span>
-              </span>
+            <div style={{ height: 64, flex: 'none', display: 'flex', alignItems: 'center', padding: '0 10px', borderBottom: '1px solid #e2e8f0' }}>
+              <button onClick={toggleOrgs} aria-label="Switch organisation" aria-expanded={ui.orgMenu} className="hov-soft" style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 10, padding: 6, border: 0, borderRadius: 8, background: 'transparent', cursor: 'pointer', textAlign: 'left' }}>
+                <span style={{ width: 32, height: 32, flex: 'none', borderRadius: 8, backgroundImage: 'linear-gradient(135deg,#0052ff,#4d7cff)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, fontWeight: 600 }}>{orgIni}</span>
+                <span style={{ minWidth: 0, flex: 1 }}>
+                  <span className="ellipsis" style={{ display: 'block', fontSize: 15, fontWeight: 600, lineHeight: 1.2 }}>{me.org.name}</span>
+                  <span style={{ display: 'block', fontSize: 12, color: '#64748b', lineHeight: 1.3 }}>{me.org.planLabel}</span>
+                </span>
+                <Icon name="chevrons-up-down" size={15} style={{ color: '#94a3b8' }} />
+              </button>
             </div>
             <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '16px 12px', display: 'flex', flexDirection: 'column', gap: 18 }}>
               {groups.map(g => (
@@ -97,7 +106,10 @@ export function AppShell({ children }: { children: ReactNode }) {
         <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', height: '100%', position: 'relative' }}>
           <header style={{ height: 64, flex: 'none', display: 'flex', alignItems: 'center', gap: 12, padding: '0 20px', borderBottom: '1px solid #e2e8f0', background: 'rgba(255,255,255,.85)', backdropFilter: 'blur(12px)', position: 'relative', zIndex: 20 }}>
             {isMobile ? <>
-              <span style={{ width: 30, height: 30, borderRadius: 8, backgroundImage: 'linear-gradient(135deg,#0052ff,#4d7cff)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 600 }}>{orgIni}</span>
+              <button onClick={toggleOrgs} aria-label="Switch organisation" style={{ height: 36, flex: 'none', display: 'flex', alignItems: 'center', gap: 2, padding: '0 2px 0 0', border: 0, borderRadius: 8, background: 'transparent', cursor: 'pointer' }}>
+                <span style={{ width: 30, height: 30, borderRadius: 8, backgroundImage: 'linear-gradient(135deg,#0052ff,#4d7cff)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 600 }}>{orgIni}</span>
+                <Icon name="chevron-down" size={14} style={{ color: '#94a3b8' }} />
+              </button>
               <p className="ellipsis" style={{ margin: 0, fontSize: 17, fontWeight: 600, letterSpacing: '-0.011em', minWidth: 0 }}>{title.title}</p>
             </> : <p className="ellipsis" style={{ margin: 0, minWidth: 0, fontSize: 15, fontWeight: 500, color: '#64748b' }}>{SCREENS[screen]?.group}</p>}
             <div style={{ flex: 1 }} />
@@ -177,6 +189,8 @@ export function AppShell({ children }: { children: ReactNode }) {
         <PaymentDialog />
         <CreditDialog />
         <CommandPalette />
+        <OrgMenu />
+        {ui.newOrg && <OrgWizard onClose={() => setUi({ newOrg: false })} />}
         {app.toastMsg && (
           <div role="status" style={{ position: 'absolute', left: '50%', bottom: 84, transform: 'translateX(-50%)', zIndex: 80, display: 'flex', alignItems: 'center', gap: 10, padding: '10px 16px', background: '#0f172a', color: '#fff', borderRadius: 10, fontSize: 14, boxShadow: '0 16px 48px -12px rgba(15,23,42,.4)', maxWidth: 'calc(100% - 32px)' }}>
             <Icon name="circle-check" size={16} style={{ color: '#6ee7b7' }} /><span>{app.toastMsg}</span>

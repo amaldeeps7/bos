@@ -8,11 +8,13 @@ import { useQueryClient } from '@tanstack/react-query';
 import type { Settings } from '@/lib/types';
 import { Badge, Btn, Card, CardHead, Check, Icon, Switch, ToggleRow, badgeStyle, tabStyle } from './ui';
 import { UserDialog } from './forms';
+import { DataExport, EntityDialog, PlanBilling } from './workspace';
 
 const GROUPS: [string, [string, string, string][]][] = [
   ['Organisation', [['org', 'Organisation', 'icon-building'], ['entities', 'Legal entities', 'icon-landmark'], ['units', 'Business units', 'icon-network'], ['modules', 'Modules', 'icon-blocks']]],
   ['People & access', [['users', 'Users', 'icon-users'], ['roles', 'Roles & permissions', 'icon-key-round'], ['security', 'Security', 'icon-shield-check']]],
   ['Documents & money', [['templates', 'Templates', 'icon-layout-template'], ['numbering', 'Numbering', 'icon-hash'], ['tax', 'Tax & GST', 'icon-percent'], ['approvalRules', 'Approval rules', 'icon-badge-check'], ['reminders', 'Reminders', 'icon-bell-ring']]],
+  ['Workspace', [['plan', 'Plan & billing', 'icon-credit-card'], ['data', 'Data & export', 'icon-database']]],
   ['Records', [['email', 'Email', 'icon-mail'], ['audit', 'Audit log', 'icon-history']]],
 ];
 const ALL_TABS = GROUPS.flatMap(g => g[1]);
@@ -48,6 +50,7 @@ export function SettingsScreen() {
           {tab === 'org' && <Org s={s} />}{tab === 'entities' && <Entities s={s} />}{tab === 'units' && <Units s={s} />}{tab === 'modules' && <Modules s={s} />}
           {tab === 'users' && <Users s={s} />}{tab === 'roles' && <Roles s={s} />}{tab === 'security' && <Security s={s} />}{tab === 'templates' && <Templates s={s} />}
           {tab === 'numbering' && <Numbering s={s} />}{tab === 'tax' && <Tax s={s} />}{tab === 'approvalRules' && <Policy s={s} />}{tab === 'reminders' && <Reminders s={s} />}{tab === 'audit' && <Audit />}{tab === 'email' && <Email />}
+          {tab === 'plan' && <PlanBilling s={s} />}{tab === 'data' && <DataExport />}
         </>}
       </div>
     </div>
@@ -84,13 +87,14 @@ function Org({ s }: { s: Settings }) {
 }
 
 function Entities({ s }: { s: Settings }) {
-  const act = useAct(); const [edit, setEdit] = useState<string | null>(null); const [draft, setDraft] = useState<any>(null);
+  const act = useAct(); const [edit, setEdit] = useState<string | null>(null); const [draft, setDraft] = useState<any>(null); const [adding, setAdding] = useState(false);
   const field = (k: string, label: string, opts: { full?: boolean; mono?: boolean; max?: number } = {}) => (
     <label className="label" style={opts.full ? { gridColumn: '1/-1' } : undefined}>{label}<input className={'input' + (opts.mono ? ' mono' : '')} maxLength={opts.max} value={draft[k]} onChange={e => setDraft({ ...draft, [k]: ['gstin', 'pan'].includes(k) ? e.target.value.toUpperCase() : e.target.value })} /></label>
   );
   return (
     <Card>
-      <CardHead title="Legal entities" sub="Who issues each document. GSTIN, address and bank details print on every invoice an entity issues." />
+      <CardHead title="Legal entities" sub="Who issues each document. One entity per GSTIN, each with its own invoice, credit note and receipt numbers." right={<Btn size="sm" icon="plus" onClick={() => setAdding(true)}>Add entity</Btn>} />
+      {adding && <EntityDialog onClose={() => setAdding(false)} />}
       {s.entities.map(le => (
         <div key={le.id} style={{ padding: '16px 20px', borderBottom: '1px solid #f1f5f9', display: 'flex', flexDirection: 'column', gap: 14 }}>
           <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px 12px' }}>
@@ -177,12 +181,16 @@ function Modules({ s }: { s: Settings }) {
 function Users({ s }: { s: Settings }) {
   const act = useAct(); const { me, has, toast } = useApp(); const qc = useQueryClient(); const [inv, setInv] = useState<{ email: string; role: string } | null>(null); const [err, setErr] = useState('');
   const [dlg, setDlg] = useState<Settings['users'][number] | 'new' | null>(null);
-  const COLS = 'minmax(240px,2fr) 190px 120px 110px 170px';
+  const params = useSearchParams();
+  // "Invite" on the Get started checklist opens the invite row straight away.
+  useEffect(() => { if (params.get('invite') && has('user.invite')) setInv({ email: '', role: 'Project manager' }); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const COLS = 'minmax(240px,2fr) 190px 210px 120px 110px 170px';
+  const scopeOpts = [{ value: 'all', label: 'All entities' }, ...s.entities.map(le => ({ value: 'le:' + le.id, label: le.name })), ...s.units.map(u => ({ value: 'bu:' + u.id, label: `${u.name} unit` }))];
   const send = async () => { setErr(''); try { const r = await api<{ message: string }>('settings/users/invite', { body: inv }); setInv(null); toast(r.message); await qc.invalidateQueries(); } catch (e: any) { setErr(e.message); } };
   const tone: Record<string, any> = { Active: 'success', Invited: 'warning', Deactivated: 'neutral' };
   return (
     <Card>
-      <CardHead title="Users" sub={`${s.users.filter(u => u.status === 'Active').length} active · ${s.users.filter(u => u.status === 'Invited').length} invited. What each person can do comes from their role.`}
+      <CardHead title="Users" sub={`${s.users.filter(u => u.status === 'Active').length} active · ${s.users.filter(u => u.status === 'Invited').length} invited. Role decides what someone can do; Access to decides whose records they see.`}
         right={<div style={{ display: 'flex', gap: 8 }}>
           {has('user.invite') && <button className="btn btn-sec" onClick={() => { setInv({ email: '', role: 'Field staff' }); setErr(''); }} style={{ height: 36, gap: 6, boxShadow: 'none' }}><Icon name="send" size={15} />Invite by email</button>}
           {has('user.manage') && <button className="btn btn-pri" onClick={() => setDlg('new')} style={{ height: 36, gap: 6 }}><Icon name="user-plus" size={15} />Add person</button>}
@@ -197,13 +205,14 @@ function Users({ s }: { s: Settings }) {
           {err && <p style={{ flexBasis: '100%', margin: 0, fontSize: 14, color: '#be123c' }}>{err}</p>}
         </div>
       )}
-      <div style={{ overflowX: 'auto' }}><div style={{ minWidth: 780 }}>
-        <div className="grid-head" style={{ display: 'grid', gridTemplateColumns: COLS }}><span>Person</span><span>Role</span><span>Status</span><span>Last active</span><span /></div>
+      <div style={{ overflowX: 'auto' }}><div style={{ minWidth: 1000 }}>
+        <div className="grid-head" style={{ display: 'grid', gridTemplateColumns: COLS }}><span>Person</span><span>Role</span><span>Access to</span><span>Status</span><span>Last active</span><span /></div>
         {s.users.map(u => { const self = u.id === me.user.id;
           return (
             <div key={u.id} style={{ display: 'grid', gridTemplateColumns: COLS, gap: 16, alignItems: 'center', padding: '10px 20px', borderBottom: '1px solid #f1f5f9', fontSize: 14 }}>
               <span style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}><span style={{ width: 32, height: 32, flex: 'none', borderRadius: 999, background: '#f1f5f9', color: '#64748b', fontSize: 12, fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{u.name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()}</span><span style={{ minWidth: 0 }}><span style={{ display: 'block', fontWeight: 500 }}>{u.name}{u.title && <span style={{ fontWeight: 400, color: '#64748b' }}> · {u.title}</span>}</span><span className="ellipsis" style={{ display: 'block', fontSize: 13, color: '#64748b' }}>{u.email}</span></span></span>
               <select disabled={self || !has('user.manage')} value={u.role} onChange={e => act(`settings/users/${u.id}`, { role: e.target.value }, { method: 'PATCH' })} style={{ height: 36, border: '1px solid #cbd5e1', borderRadius: 8, padding: '0 8px', fontSize: 14, background: '#fff' }}>{s.roles.map(r => <option key={r.id}>{r.name}</option>)}</select>
+              <select aria-label={`What ${u.name} can see`} disabled={!has('user.manage') || u.role === 'Owner'} title={u.role === 'Owner' ? 'The Owner always sees every entity and unit.' : undefined} value={u.role === 'Owner' ? 'all' : u.scope} onChange={e => act(`settings/users/${u.id}`, { scope: e.target.value }, { method: 'PATCH' })} style={{ height: 36, minWidth: 0, border: '1px solid #cbd5e1', borderRadius: 8, padding: '0 8px', fontSize: 14, background: '#fff' }}>{scopeOpts.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}</select>
               <span><Badge tone={tone[u.status]} dot>{u.status}</Badge></span>
               <span style={{ color: '#64748b' }}>{u.last}</span>
               <span style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 6 }}>
@@ -351,7 +360,8 @@ function Templates({ s }: { s: Settings }) {
   const compact = t.layout === 'Compact', modern = t.layout === 'Modern';
   const grid = t.show.sac ? '1fr 50px 44px 66px 74px' : '1fr 44px 66px 74px';
   const gTot: CSSProperties = { fontWeight: 600, paddingTop: 5, marginTop: 2, borderTop: '1px solid #cbd5e1', fontSize: '1.15em' };
-  const sr = s.series.find(x => x.type === (isInv ? 'INVOICE' : 'QUOTATION'))!;
+  const def = s.entities.find(e => e.isDefault)?.id;
+  const sr = s.series.find(x => x.type === (isInv ? 'INVOICE' : 'QUOTATION') && (!isInv || x.entityId === def)) || s.series.find(x => x.type === (isInv ? 'INVOICE' : 'QUOTATION'))!;
   const no = formatNumber(sr, today, s.org.fy);
   const ini = me.org.name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
   const cust = { name: 'Halcyon Logistics', gstin: '29AADCH7713P1ZQ', city: 'Bengaluru' };
@@ -415,16 +425,16 @@ function Templates({ s }: { s: Settings }) {
 function Numbering({ s }: { s: Settings }) {
   const act = useAct(); const { today } = useApp(); const [se, setSe] = useState<Settings['series'][number] | null>(null);
   const COLS = 'minmax(150px,1.2fr) minmax(200px,1.5fr) 70px 150px 70px';
-  const orig = se && s.series.find(x => x.type === se.type);
+  const orig = se && s.series.find(x => x.id === se.id);
   const err = !se ? '' : !String(se.pattern).includes('{seq}') ? 'The pattern must include {seq}.' : (+se.next || 0) < orig!.next ? `Forward only. Numbers below ${orig!.next} are already on documents.` : '';
   return <>
     <Card>
-      <CardHead title="Numbering" sub="One counter per document type. Two people raising documents at once can never get the same number." />
+      <CardHead title="Numbering" sub="One counter per document type and issuing entity. GST needs a separate invoice series for each GSTIN, and two people issuing at once never get the same number." />
       <div style={{ overflowX: 'auto' }}><div style={{ minWidth: 680 }}>
         <div className="grid-head" style={{ display: 'grid', gridTemplateColumns: COLS }}><span>Documents</span><span>Format</span><span style={{ textAlign: 'right' }}>Issued</span><span>Next</span><span /></div>
         {s.series.map(r => (
-          <div key={r.type} style={{ display: 'grid', gridTemplateColumns: COLS, gap: 16, alignItems: 'center', padding: '12px 20px', borderBottom: '1px solid #f1f5f9', fontSize: 14 }}>
-            <span><span style={{ display: 'block', fontWeight: 500 }}>{r.label}</span><span style={{ display: 'block', fontSize: 13, color: '#94a3b8' }}>Resets: {r.reset}</span></span>
+          <div key={r.id} style={{ display: 'grid', gridTemplateColumns: COLS, gap: 16, alignItems: 'center', padding: '12px 20px', borderBottom: '1px solid #f1f5f9', fontSize: 14 }}>
+            <span style={{ minWidth: 0 }}><span style={{ display: 'block', fontWeight: 500 }}>{r.label}</span><span className="ellipsis" style={{ display: 'block', fontSize: 13, color: '#475569' }}>{r.entity}</span><span style={{ display: 'block', fontSize: 13, color: '#94a3b8' }}>Resets: {r.reset}</span></span>
             <span className="mono" style={{ fontSize: 13, color: '#64748b' }}>{r.pattern}</span>
             <span className="num" style={{ textAlign: 'right', color: '#64748b' }}>{r.next - 1}</span>
             <span className="mono" style={{ fontSize: 14, fontWeight: 500 }}>{r.sample}</span>
@@ -436,7 +446,7 @@ function Numbering({ s }: { s: Settings }) {
     </Card>
     {se && (
       <div style={{ background: '#fff', border: '1px solid #0052ff', borderRadius: 12, boxShadow: '0 0 0 3px rgba(0,82,255,.1)' }}>
-        <CardHead title={`${se.label} numbering`} />
+        <CardHead title={`${se.label} numbering`} sub={se.entity} />
         <div style={{ padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: 16 }}>
           <div style={{ padding: '12px 16px', borderRadius: 10, background: '#f8fafc', border: '1px solid #e2e8f0' }}><p style={{ margin: 0, fontSize: 13, color: '#64748b' }}>Next document</p><p className="mono" style={{ margin: '4px 0 0', fontSize: 20, fontWeight: 600, letterSpacing: '-0.01em' }}>{formatNumber(se, today, s.org.fy)}</p></div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(160px,1fr))', gap: 14 }}>
@@ -448,7 +458,7 @@ function Numbering({ s }: { s: Settings }) {
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(220px,1fr))', gap: '4px 16px', fontSize: 13 }}>{SERIES_TOKENS.map(([tk, m]) => <span key={tk}><span className="mono" style={{ color: '#334155' }}>{tk}</span> <span style={{ color: '#64748b' }}>{m}</span></span>)}</div>
           {err && <p style={{ margin: 0, fontSize: 14, color: '#be123c' }}>{err}</p>}
         </div>
-        <Foot><Btn onClick={() => setSe(null)} style={{ boxShadow: 'none' }}>Cancel</Btn><Btn kind="pri" disabled={!!err} onClick={async () => { const r = await act(`settings/series/${se.type}`, se, { method: 'PATCH' }); if (r) setSe(null); }}>Save</Btn></Foot>
+        <Foot><Btn onClick={() => setSe(null)} style={{ boxShadow: 'none' }}>Cancel</Btn><Btn kind="pri" disabled={!!err} onClick={async () => { const r = await act(`settings/series/${se.id}`, se, { method: 'PATCH' }); if (r) setSe(null); }}>Save</Btn></Foot>
       </div>
     )}
   </>;

@@ -5,7 +5,7 @@ import { api, ApiError } from '@/lib/api';
 
 function Accept() {
   const token = useSearchParams().get('token') || '';
-  const [info, setInfo] = useState<{ email: string; name: string; role: string; org: string; minPassword: number } | null>(null);
+  const [info, setInfo] = useState<{ email: string; name: string; role: string; org: string; minPassword: number; hasAccount: boolean } | null>(null);
   const [f, setF] = useState({ name: '', title: '', password: '', confirm: '' });
   const [err, setErr] = useState(''); const [busy, setBusy] = useState(false);
   useEffect(() => {
@@ -14,7 +14,7 @@ function Accept() {
   }, [token]);
   const submit = async (e: FormEvent) => {
     e.preventDefault(); setErr('');
-    if (f.password !== f.confirm) return setErr('The passwords don’t match.');
+    if (!info?.hasAccount && f.password !== f.confirm) return setErr('The passwords don’t match.');
     setBusy(true);
     try { await api('auth/accept-invite', { body: { token, name: f.name, title: f.title, password: f.password } }); location.href = '/'; }
     catch (x) { setErr(x instanceof ApiError ? x.message : 'Could not finish joining.'); setBusy(false); }
@@ -31,8 +31,13 @@ function Accept() {
             <label className="label">Work email<input className="input" value={info.email} disabled /></label>
             <label className="label">Your name<input className="input" value={f.name} onChange={e => setF({ ...f, name: e.target.value })} autoComplete="name" required /></label>
             <label className="label">Job title <span style={{ fontWeight: 400, color: '#94a3b8', fontSize: 13, marginTop: -4 }}>Optional</span><input className="input" value={f.title} onChange={e => setF({ ...f, title: e.target.value })} /></label>
-            <label className="label">Choose a password<input className="input" type="password" value={f.password} onChange={e => setF({ ...f, password: e.target.value })} autoComplete="new-password" required /><span className="hint">At least {info.minPassword} characters.</span></label>
-            <label className="label">Confirm password<input className="input" type="password" value={f.confirm} onChange={e => setF({ ...f, confirm: e.target.value })} autoComplete="new-password" required /></label>
+            {info.hasAccount ? (
+              // Already uses Business OS: confirm with the existing password; the organisation joins their menu.
+              <label className="label">Your Business OS password<input className="input" type="password" value={f.password} onChange={e => setF({ ...f, password: e.target.value })} autoComplete="current-password" required /><span className="hint">You already have an account, so {info.org} is added to your organisation menu.</span></label>
+            ) : <>
+              <label className="label">Choose a password<input className="input" type="password" value={f.password} onChange={e => setF({ ...f, password: e.target.value })} autoComplete="new-password" required /><span className="hint">At least {info.minPassword} characters.</span></label>
+              <label className="label">Confirm password<input className="input" type="password" value={f.confirm} onChange={e => setF({ ...f, confirm: e.target.value })} autoComplete="new-password" required /></label>
+            </>}
             {err && <p style={{ margin: 0, fontSize: 14, color: '#be123c' }}>{err}</p>}
             <button className="btn btn-pri" type="submit" disabled={busy} style={{ justifyContent: 'center' }}>{busy ? 'Joining…' : 'Join and sign in'}</button>
           </form>

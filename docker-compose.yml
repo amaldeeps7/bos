@@ -30,7 +30,10 @@ services:
   api:
     build: { context: ., dockerfile: apps/api/Dockerfile }
     environment:
-      DATABASE_URL: postgresql://bos:bos@db:5432/bos?schema=public
+      # The API runs as bos_app (no BYPASSRLS), so Postgres row-level security isolates organisations.
+      # Migrations, the role setup and the demo seed use the owner.
+      DATABASE_URL: postgresql://bos_app:${APP_DB_PASSWORD:-bos_app}@db:5432/bos?schema=public
+      MIGRATE_DATABASE_URL: postgresql://bos:bos@db:5432/bos?schema=public
       REDIS_URL: redis://redis:6379
       JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
       DEMO_MODE: ${DEMO_MODE:-true}
@@ -40,6 +43,8 @@ services:
       SMTP_URL: ${SMTP_URL:-smtp://mailpit:1025}
       EMAIL_FROM: ${EMAIL_FROM:-Demo Consulting <billing@democonsulting.in>}
       PORT: 4000
+      STORAGE_DIR: /data/storage
+    volumes: [storage:/data/storage]
     depends_on:
       db: { condition: service_healthy }
       redis: { condition: service_healthy }
@@ -56,3 +61,4 @@ services:
 
 volumes:
   pgdata:
+  storage:

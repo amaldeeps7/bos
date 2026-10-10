@@ -22,4 +22,4 @@ COPY --from=build /app /app
 WORKDIR /app/apps/api
 EXPOSE 4000
 # Apply migrations, load the demo workspace into an empty database (SEED_DEMO=true), then start.
-CMD ["sh", "-c", "npx prisma migrate deploy && if [ \"$SEED_DEMO\" = \"true\" ]; then npx ts-node --transpile-only prisma/seed.ts --if-empty; fi && node dist/main.js"]
+CMD ["sh", "-c", "npx prisma migrate deploy && node prisma/app-role.js && if [ \"$SEED_DEMO\" = \"true\" ]; then npx ts-node --transpile-only prisma/seed.ts --if-empty; fi && node dist/main.js"]

@@ -1,8 +1,12 @@
 import type { Calc, Line } from '@bos/shared';
 
+export interface OrgRow { id: string; name: string; ini: string; slug: string; role: string; sub: string; current: boolean; setupDone?: boolean }
 export interface Me {
-  user: { id: string; name: string; email: string; title: string; roleId: string; roleName: string; builtIn: boolean; perms: string[]; modules: Record<string, boolean> };
-  org: { name: string; slug: string; tz: string; currency: string; ourState: string; discLimit: number; sacRates: Record<string, number>; templates: any; entity: { name: string; gstin: string; address: string; bank: string; upi: string } | null };
+  user: { id: string; accountId: string; orgId: string; name: string; email: string; title: string; roleId: string; roleName: string; builtIn: boolean; perms: string[]; modules: Record<string, boolean>; scope: any };
+  org: { id: string; name: string; slug: string; ini: string; plan: string; planLabel: string; setupDone: boolean; tz: string; currency: string; fyStart: string; ourState: string; discLimit: number; sacRates: Record<string, number>; templates: any; entity: { name: string; gstin: string; address: string; bank: string; upi: string } | null };
+  entities: { id: string; name: string; gstin: string; isDefault: boolean; address: string; bank: string; upi: string }[];
+  units: { id: string; name: string; entityId: string }[];
+  orgs: OrgRow[];
   demo: boolean; serverTime: string;
 }
 export interface TeamMember { id: string; name: string; title: string; dept: string; email: string; managerId: string | null; status: 'available' | 'meeting' | 'leave'; statusLabel: string; statusText: string }
@@ -24,8 +28,8 @@ export interface Customer { id: string; name: string; gstin: string; state: stri
 export interface Opportunity { id: string; name: string; customerId: string; customer: string; value: number; ownerId: string; stage: number; next: string }
 export interface CatalogItem { id: string; d: string; sac: string; unit: string; rate: number }
 interface DocApproval { id: string; approverId: string; approverName: string }
-export interface Quote { id: string; no: string; customerId: string; title: string; date: string; validUntil: string; status: string; byId: string; ver: number; lines: Line[]; notes: string; rejected: string | null; projectId: string | null; invoiceId: string | null; calc: Calc; approval: DocApproval | null }
-export interface Invoice { id: string; no: string; customerId: string; title: string; projectId: string | null; milestoneId: string | null; date: string; due: string; status: string; displayStatus: string; byId: string; lines: Line[]; notes: string; rejected: string | null; calc: Calc; paid: number; credited: number; bal: number; overdue: boolean; approval: DocApproval | null }
+export interface Quote { id: string; no: string; entityId: string; entity: string; customerId: string; title: string; date: string; validUntil: string; status: string; byId: string; ver: number; lines: Line[]; notes: string; rejected: string | null; projectId: string | null; invoiceId: string | null; calc: Calc; approval: DocApproval | null }
+export interface Invoice { id: string; no: string; entityId: string; entity: string; customerId: string; title: string; projectId: string | null; milestoneId: string | null; date: string; due: string; status: string; displayStatus: string; byId: string; lines: Line[]; notes: string; rejected: string | null; calc: Calc; paid: number; credited: number; bal: number; overdue: boolean; approval: DocApproval | null }
 export interface Payment { id: string; no: string; customerId: string; date: string; method: string; ref: string; amount: number; allocations: { invoiceId: string; invoiceNo: string; amount: number }[] }
 export interface CreditNote { id: string; no: string; invoiceId: string; invoiceNo: string; customerId: string; date: string; taxable: number; total: number; reason: string }
 export interface Asset { id: string; code: string; name: string; cat: string; holderId: string | null; projectId: string | null; status: string; value: number }
@@ -38,11 +42,24 @@ export interface Settings {
   security: any; policy: any; taxOpts: any; reminders: any; templates: any;
   entities: { id: string; name: string; gstin: string; pan: string; cin: string; address: string; bank: string; upi: string; isDefault: boolean; state: string }[];
   units: { id: string; name: string; code: string; entity: string; entityId: string; headId: string | null; head: string; projects: number }[];
-  users: { id: string; name: string; email: string; title: string; role: string; status: string; last: string }[];
+  users: { id: string; name: string; email: string; title: string; role: string; scope: string; status: string; last: string }[];
   roles: Role[];
-  series: { type: string; label: string; prefix: string; pattern: string; padding: number; next: number; reset: string; sample: string }[];
+  series: { id: string; type: string; entityId: string | null; entity: string; label: string; prefix: string; pattern: string; padding: number; next: number; reset: string; sample: string }[];
   sac: { code: string; desc: string; rate: number; used: number }[];
 }
 export interface AiReply { text: string; bullets?: string[]; action?: { label: string; kind: 'navigate' | 'reassign' | 'copy' | 'remind'; payload?: Record<string, string> } }
 export interface SearchHit { type: string; id: string; title: string; sub: string; href?: string; open?: 'task' | 'meeting' }
 export interface SearchResult { q: string; groups: { type: string; label: string; hits: SearchHit[] }[] }
+export interface SetupState {
+  setupDone: boolean; name: string;
+  steps: Record<'org' | 'entity' | 'numbering' | 'team' | 'customer' | 'catalog' | 'calendar', boolean>;
+  detail: { currency: string; fy: string; tz: string; entity: string; invited: number; firstInvoice: string };
+  facts: { label: string; value: string }[];
+}
+export interface PlanInfo {
+  plan: string; label: string; trialEndsAt: string | null; billingEmail: string; billEntityId: string | null;
+  plans: { id: string; name: string; price: string; seats: number; entities: number; feats: string[]; current: boolean; fits: boolean }[];
+  usage: { seats: number; seatLimit: number; entities: number; entityLimit: number; documents: number; storageBytes: number; aiRequests: number; month: string };
+  invoices: { no: string; period: string; amount: string; status: string }[];
+}
+export interface DataInfo { facts: { label: string; value: string }[]; exports: { id: string; who: string; when: string; status: string; url: string | null }[]; closeDays: number }
