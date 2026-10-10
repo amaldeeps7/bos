@@ -1,25 +1,33 @@
 /* End-to-end checks against a real Postgres (DATABASE_URL). Run `pnpm seed` first; the suite re-seeds itself. */
-import { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { execSync } from 'child_process';
-import cookieParser from 'cookie-parser';
+import type { NestExpressApplication } from '@nestjs/platform-express';
 import request from 'supertest';
 import { PrismaClient } from '@prisma/client';
+import { authenticator } from 'otplib';
 import { AppModule } from '../src/app.module';
+import { configureApp } from '../src/main';
+import { RedisService } from '../src/core/redis.service';
 
-let app: INestApplication;
+let app: NestExpressApplication;
 /** Owner connection (bypasses RLS) for checking what the API wrote. The API itself runs as bos_app. */
 const db = new PrismaClient({ datasourceUrl: process.env.MIGRATE_DATABASE_URL || process.env.DATABASE_URL });
 // Sign-in returns you to the organisation you used last; tests name the one they mean.
 const login = async (email: string, org = 'democonsulting') => {
-  const res = await request(app.getHttpServer()).post('/api/auth/login').send({ email, password: 'demo1234', org }).expect(200);
+  // Each sign-in from its own address, as real people would be: sign-in is rate-limited per IP.
+  const ip = `10.${Math.floor(Math.random() * 250)}.${Math.floor(Math.random() * 250)}.${Math.floor(Math.random() * 250)}`;
+  const res = await request(app.getHttpServer()).post('/api/auth/login').set('X-Forwarded-For', ip).send({ email, password: 'demo1234', org }).expect(200);
   return res.headers['set-cookie'] as unknown as string[];
 };
 
 beforeAll(async () => {
   execSync('npx ts-node --transpile-only prisma/seed.ts', { cwd: __dirname + '/..', stdio: 'ignore' });
   const mod = await Test.createTestingModule({ imports: [AppModule] }).compile();
-  app = mod.createNestApplication(); app.setGlobalPrefix('api'); app.use(cookieParser());
+  // The same middleware as the server (security headers, cross-site check, rate limits), with the per-IP default raised:
+  // the whole suite comes from one address.
+  process.env.RATE_LIMIT_PER_MIN = '100000';
+  app = configureApp(mod.createNestApplication<NestExpressApplication>());
+  await app.get(RedisService).delPattern('bos:rl:*');
   await app.init();
 }, 60000);
 afterAll(async () => { await app?.close(); await db.$disconnect(); });
@@ -250,7 +258,7 @@ describe('team and profiles', () => {
 describe('multitenancy (spec §9)', () => {
   const http = () => request(app.getHttpServer());
   const DEMO = 'org_7f3k2q9xw1';
-  let b: { cookie: string[]; id: string };
+  let b: { cookie: string[]; id: string; secret: string };
 
   /** A second organisation, created through public sign-up by a new account. */
   beforeAll(async () => {
@@ -260,7 +268,12 @@ describe('multitenancy (spec §9)', () => {
       numbering: { inv: 'INV', qt: 'QT', pattern: '{prefix}-{yyyy}-{seq}' },
       account: { name: 'Kiran Rao', email: 'kiran@kestrel-advisory.in', password: 'kestrel-password-1' },
     }).expect(201);
-    b = { cookie: res.headers['set-cookie'] as unknown as string[], id: res.body.id };
+    // New organisations require two-factor for the Owner, so sign-up hands back a setup ticket instead of a session.
+    expect(res.body.mfa).toBe('setup'); expect(res.headers['set-cookie']).toBeUndefined();
+    const setup = await http().post('/api/auth/mfa/setup').send({ ticket: res.body.ticket }).expect(200);
+    const on = await http().post('/api/auth/mfa/enable').send({ ticket: res.body.ticket, code: authenticator.generate(setup.body.secret) }).expect(200);
+    expect(on.body.codes).toHaveLength(10);
+    b = { cookie: on.headers['set-cookie'] as unknown as string[], id: res.body.id, secret: setup.body.secret };
   }, 30000);
 
   it('signs up a new organisation with its own Owner, entity and numbering; slugs are unique', async () => {
@@ -268,7 +281,7 @@ describe('multitenancy (spec §9)', () => {
     expect(me.user.roleName).toBe('Owner'); expect(me.org.plan).toBe('trial'); expect(me.org.setupDone).toBe(false);
     expect(me.entities).toHaveLength(1); expect(me.orgs).toHaveLength(1);
     await http().post('/api/signup').send({ name: 'X', slug: 'kestrel-advisory', entity: { name: 'X', gstin: '29AAKFK1234M1Z5' }, account: { name: 'Y', email: 'y@y.in', password: 'yyyyyyyyyyyy' } }).expect(400);
-    await http().post('/api/auth/login').send({ email: 'kiran@kestrel-advisory.in', password: 'kestrel-password-1' }).expect(200);
+    expect((await http().post('/api/auth/login').send({ email: 'kiran@kestrel-advisory.in', password: 'kestrel-password-1' }).expect(200)).body.mfa).toBe('code');
   });
 
   it('allows the same customer GSTIN and invoice number in two organisations', async () => {
@@ -566,5 +579,144 @@ describe('GST on and off', () => {
     await http().patch(`/api/settings/entities/${le2.id}`).set('Cookie', owner).send({ gst: true, gstin: '27AAJFD2210K1ZP' }).expect(200);
     const back = (await http().get('/api/invoices').set('Cookie', owner)).body.find((i: any) => i.id === inv.body.id);
     expect([back.calc.gst, back.calc.tax, back.calc.intra]).toEqual([true, 3600, true]);
+  });
+});
+
+describe('two-factor sign-in', () => {
+  const http = () => request(app.getHttpServer());
+  const cookieOf = (r: any) => r.headers['set-cookie'] as unknown as string[];
+  // Each 30-second step works once per account; the API also accepts the next step (clock drift), so use that if this one is spent.
+  const freshCode = async (secret: string, email: string) => {
+    for (;;) {
+      const used = (await db.account.findUniqueOrThrow({ where: { email } })).mfaStep; const now = Date.now(); const step = Math.floor(now / 30_000);
+      for (const d of [0, 1]) if (step + d > used) return authenticator.clone({ epoch: now + d * 30_000 }).generate(secret);
+      await new Promise(r => setTimeout(r, 1000));
+    }
+  };
+
+  it('turns on from the profile, then asks for a code at sign-in; a backup code works once', async () => {
+    const pm = await login('priya@democonsulting.in');
+    const st = await http().post('/api/auth/mfa/setup').set('Cookie', pm).send({}).expect(200);
+    expect(st.body.qr).toMatch(/^data:image\/png;base64,/);
+    await http().post('/api/auth/mfa/enable').set('Cookie', pm).send({ code: '000000' }).expect(400);
+    const c1 = authenticator.generate(st.body.secret);
+    const on = await http().post('/api/auth/mfa/enable').set('Cookie', pm).send({ code: c1 }).expect(200);
+    const backup = on.body.codes as string[];
+    expect((await http().get('/api/auth/mfa').set('Cookie', cookieOf(on)).expect(200)).body).toMatchObject({ on: true, backupLeft: 10, required: false });
+    // The secret is stored encrypted, not as typed.
+    const acc = await db.account.findUniqueOrThrow({ where: { email: 'priya@democonsulting.in' } });
+    expect(acc.mfaSecret).toMatch(/^v1\./); expect(acc.mfaSecret).not.toContain(st.body.secret);
+
+    // Sign-in now stops at the second step: no session until the code checks out.
+    const first = await http().post('/api/auth/login').send({ email: 'priya@democonsulting.in', password: 'demo1234', org: 'democonsulting' }).expect(200);
+    expect(first.body.mfa).toBe('code'); expect(cookieOf(first)).toBeUndefined();
+    await http().get('/api/auth/me').set('Authorization', `Bearer ${first.body.ticket}`).expect(401); // a ticket isn't a session
+    await http().post('/api/auth/mfa/verify').send({ ticket: first.body.ticket, code: c1 }).expect(400); // already used
+    const ok = await http().post('/api/auth/mfa/verify').send({ ticket: first.body.ticket, code: backup[0] }).expect(200);
+    expect(ok.body.message).toMatch(/backup code. 9 left/);
+    await http().get('/api/auth/me').set('Cookie', cookieOf(ok)).expect(200);
+    const again = await http().post('/api/auth/login').send({ email: 'priya@democonsulting.in', password: 'demo1234', org: 'democonsulting' }).expect(200);
+    await http().post('/api/auth/mfa/verify').send({ ticket: again.body.ticket, code: backup[0] }).expect(400); // used up
+
+    // Turning it off needs the password and a code.
+    await http().post('/api/auth/mfa/disable').set('Cookie', cookieOf(ok)).send({ password: 'wrong', code: backup[1] }).expect(400);
+    await http().post('/api/auth/mfa/disable').set('Cookie', cookieOf(ok)).send({ password: 'demo1234', code: backup[1] }).expect(200);
+    expect((await http().post('/api/auth/login').send({ email: 'priya@democonsulting.in', password: 'demo1234', org: 'democonsulting' }).expect(200)).body.ok).toBe(true);
+  }, 60000);
+
+  it('enforces the organisation policy: sessions without a second factor are sent back to sign in, and it can’t be turned off', async () => {
+    // A new organisation requires two-factor for its Owner: sign-up enrols, and every later sign-in asks for a code.
+    const email = 'lata@lotus-studio.in', password = 'lotus-password-1';
+    const up = await http().post('/api/signup').send({ name: 'Lotus Studio', slug: 'lotus-studio', entity: { name: 'Lotus Studio', gst: false, state: '29' }, account: { name: 'Lata Iyer', email, password } }).expect(201);
+    const secret = (await http().post('/api/auth/mfa/setup').send({ ticket: up.body.ticket }).expect(200)).body.secret;
+    await http().post('/api/auth/mfa/enable').send({ ticket: up.body.ticket, code: authenticator.generate(secret) }).expect(200);
+    const t = await http().post('/api/auth/login').send({ email, password }).expect(200);
+    expect(t.body.mfa).toBe('code');
+    const s = await http().post('/api/auth/mfa/verify').send({ ticket: t.body.ticket, code: await freshCode(secret, email) }).expect(200);
+    expect((await http().get('/api/auth/mfa').set('Cookie', cookieOf(s))).body).toMatchObject({ on: true, required: true });
+    const off = await http().post('/api/auth/mfa/disable').set('Cookie', cookieOf(s)).send({ password, code: await freshCode(secret, email) }).expect(400);
+    expect(off.body.message).toMatch(/Lotus Studio requires two-factor/);
+
+    // In a normal organisation (the sample one is exempt), an Owner without two-factor is sent back to set it up.
+    const owner = await login('anand@democonsulting.in');
+    await db.organization.update({ where: { id: 'org_7f3k2q9xw1' }, data: { demo: false } });
+    try {
+      expect((await http().get('/api/projects').set('Cookie', owner).expect(401)).body.code).toBe('mfa_required');
+      expect((await http().post('/api/auth/login').send({ email: 'anand@democonsulting.in', password: 'demo1234', org: 'democonsulting' }).expect(200)).body.mfa).toBe('setup');
+      // A Project manager isn't covered by the Owner/Finance rule.
+      expect((await http().post('/api/auth/login').send({ email: 'priya@democonsulting.in', password: 'demo1234', org: 'democonsulting' }).expect(200)).body.ok).toBe(true);
+    } finally { await db.organization.update({ where: { id: 'org_7f3k2q9xw1' }, data: { demo: true } }); }
+  }, 90000);
+
+  it('lets an admin reset two-factor for someone who lost their phone, only if that account is theirs alone', async () => {
+    const owner = await login('anand@democonsulting.in');
+    const pm = await login('priya@democonsulting.in');
+    const st = await http().post('/api/auth/mfa/setup').set('Cookie', pm).send({}).expect(200);
+    await http().post('/api/auth/mfa/enable').set('Cookie', pm).send({ code: authenticator.generate(st.body.secret) }).expect(200);
+    const priya = (await http().get('/api/settings').set('Cookie', owner)).body.users.find((u: any) => u.email === 'priya@democonsulting.in');
+    expect(priya.mfa).toBe(true);
+    // Priya also belongs to Raman Advisory, so Demo's Owner can't weaken her sign-in.
+    expect((await http().post(`/api/settings/users/${priya.id}/reset-mfa`).set('Cookie', owner).expect(400)).body.message).toMatch(/another organisation/);
+    await http().post(`/api/settings/users/${priya.id}/reset-mfa`).set('Cookie', await login('arjun@democonsulting.in')).expect(403);
+    const meera = (await http().get('/api/settings').set('Cookie', owner)).body.users.find((u: any) => u.email === 'meera@democonsulting.in');
+    const fin = await login('meera@democonsulting.in');
+    const ms = await http().post('/api/auth/mfa/setup').set('Cookie', fin).send({}).expect(200);
+    await http().post('/api/auth/mfa/enable').set('Cookie', fin).send({ code: authenticator.generate(ms.body.secret) }).expect(200);
+    await http().post(`/api/settings/users/${meera.id}/reset-mfa`).set('Cookie', owner).expect(200);
+    expect((await db.account.findUniqueOrThrow({ where: { email: 'meera@democonsulting.in' } })).mfaSecret).toBeNull();
+    await db.account.update({ where: { email: 'priya@democonsulting.in' }, data: { mfaSecret: null, mfaBackup: [], mfaStep: 0 } });
+  }, 90000);
+});
+
+describe('security basics', () => {
+  const http = () => request(app.getHttpServer());
+
+  it('sends security headers and hides the framework', async () => {
+    const r = await http().get('/api/health');
+    expect(r.headers['x-content-type-options']).toBe('nosniff');
+    expect(r.headers['x-frame-options']).toBe('SAMEORIGIN');
+    expect(r.headers['strict-transport-security']).toMatch(/max-age/);
+    expect(r.headers['content-security-policy']).toMatch(/default-src 'none'/);
+    expect(r.headers['x-powered-by']).toBeUndefined();
+    // PDFs open in the browser's viewer, so they don't carry the deny-all policy.
+    const owner = await login('anand@democonsulting.in');
+    const inv = (await http().get('/api/invoices').set('Cookie', owner)).body[0];
+    const pdf = await http().get(`/api/invoices/${inv.id}/pdf`).set('Cookie', owner).expect(200);
+    expect(pdf.headers['content-security-policy']).toBeUndefined(); expect(pdf.headers['x-content-type-options']).toBe('nosniff');
+  });
+
+  it('refuses state-changing requests from another website', async () => {
+    const owner = await login('anand@democonsulting.in');
+    const evil = await http().post('/api/notifications/read-all').set('Cookie', owner).set('Origin', 'https://evil.example').expect(403);
+    expect(evil.body.message).toMatch(/another website/);
+    await http().post('/api/auth/login').set('Origin', 'https://evil.example').send({ email: 'x@y.z', password: 'x' }).expect(403);
+    // The app's own origin, and non-browser clients (no Origin), are fine.
+    await http().post('/api/auth/login').set('Origin', 'http://localhost:3000').send({ email: 'priya@democonsulting.in', password: 'demo1234', org: 'democonsulting' }).expect(200);
+    await http().get('/api/auth/me').set('Cookie', owner).set('Origin', 'https://evil.example').expect(200); // reads are covered by CORS
+  });
+
+  it('rate-limits sensitive routes per IP, user or organisation', async () => {
+    const ip = `10.9.${Math.floor(Math.random() * 250)}.${Math.floor(Math.random() * 250)}`;
+    for (let i = 0; i < 60; i++) await http().get('/api/signup/slug/some-name').set('X-Forwarded-For', ip).expect(200);
+    const r = await http().get('/api/signup/slug/some-name').set('X-Forwarded-For', ip).expect(429);
+    expect(r.headers['retry-after']).toBe('60');
+    await http().get('/api/signup/slug/some-name').set('X-Forwarded-For', '10.250.0.1').expect(200); // another address isn't affected
+    // The per-IP default applies to every route.
+    process.env.RATE_LIMIT_PER_MIN = '3';
+    try {
+      const other = `10.8.${Math.floor(Math.random() * 250)}.1`;
+      for (let i = 0; i < 3; i++) await http().get('/api/health').set('X-Forwarded-For', other).expect(200);
+      await http().get('/api/health').set('X-Forwarded-For', other).expect(429);
+    } finally { process.env.RATE_LIMIT_PER_MIN = '100000'; }
+  });
+
+  it('marks cookies Secure in production unless told otherwise', () => {
+    const { secureCookies } = require('../src/core/session.service');
+    const env = { ...process.env };
+    try {
+      process.env.NODE_ENV = 'production'; delete process.env.COOKIE_SECURE; expect(secureCookies()).toBe(true);
+      process.env.COOKIE_SECURE = 'false'; expect(secureCookies()).toBe(false);
+      process.env.NODE_ENV = 'development'; delete process.env.COOKIE_SECURE; expect(secureCookies()).toBe(false);
+    } finally { process.env = env; }
   });
 });

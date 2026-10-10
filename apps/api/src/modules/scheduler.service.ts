@@ -1,4 +1,4 @@
-import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { addDays, dayLabel, fmtT, nowHours } from '@bos/shared';
 import { PrismaService } from '../core/prisma.service';
 import { RedisService } from '../core/redis.service';
@@ -10,31 +10,29 @@ import { prefsOf } from './team.controller';
 import { ExportService, orgDir } from './export.service';
 import { runAs } from '../core/tenant';
 import { promises as fs } from 'fs';
+import { QueueService } from '../core/queue.service';
 
 const DIGEST_AT = 8.5; // 8:30 am, organisation time
 const REMIND_MIN = 10;
 
 /**
  * Once a minute: meeting reminders 10 minutes before the start, and the 8:30 am daily digest,
- * for people who left those switched on in their profile. Redis makes each send happen once
- * even with several API instances. Off in tests, or with SCHEDULER=off.
+ * for people who left those switched on in their profile; expired exports; closed organisations.
+ * Runs as a repeating BullMQ job, so it runs once a minute however many API instances there are,
+ * and Redis keys still make each send happen once. Off in tests, or with SCHEDULER=off.
  */
 @Injectable()
-export class SchedulerService implements OnModuleInit, OnModuleDestroy {
+export class SchedulerService implements OnModuleInit {
   private log = new Logger('Scheduler');
-  private timer?: ReturnType<typeof setInterval>;
-  private busy = false;
-  constructor(private prisma: PrismaService, private redis: RedisService, private notify: NotifyService, private orgs: OrgService, private mail: MailService, private exports: ExportService) {}
+  constructor(private prisma: PrismaService, private redis: RedisService, private notify: NotifyService, private orgs: OrgService, private mail: MailService, private exports: ExportService, private queue: QueueService) {}
 
   onModuleInit() {
+    this.queue.handle('tick', () => this.tick());
     if (process.env.SCHEDULER === 'off' || process.env.NODE_ENV === 'test') return;
-    this.timer = setInterval(() => void this.tick(), 60_000);
-    this.timer.unref?.();
+    this.queue.every('tick', 60_000);
   }
-  onModuleDestroy() { if (this.timer) clearInterval(this.timer); }
 
   async tick(at = new Date()) {
-    if (this.busy) return; this.busy = true;
     try {
       // Each organisation runs in its own tenant context; one failing doesn't stop the rest (spec §6).
       const orgs = await this.prisma.organization.findMany({ where: { status: 'active' }, select: { id: true } });
@@ -49,7 +47,6 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
       }
       await this.purge();
     } catch (e) { this.log.warn(`tick failed: ${(e as Error).message}`); }
-    finally { this.busy = false; }
   }
 
   /** Closed organisations are deleted for good 30 days after closing (rows cascade from Organization; files removed). */

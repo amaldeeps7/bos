@@ -42,7 +42,7 @@ export interface Settings {
   security: any; policy: any; taxOpts: any; reminders: any; templates: any;
   entities: { id: string; name: string; gst: boolean; gstin: string; pan: string; cin: string; address: string; bank: string; upi: string; isDefault: boolean; state: string; stateCode: string }[];
   units: { id: string; name: string; code: string; entity: string; entityId: string; headId: string | null; head: string; projects: number }[];
-  users: { id: string; name: string; email: string; title: string; role: string; scope: string; status: string; last: string }[];
+  users: { id: string; name: string; email: string; title: string; role: string; scope: string; status: string; last: string; mfa: boolean }[];
   roles: Role[];
   series: { id: string; type: string; entityId: string | null; entity: string; label: string; prefix: string; pattern: string; padding: number; next: number; reset: string; sample: string }[];
   sac: { code: string; desc: string; rate: number; used: number }[];

@@ -219,9 +219,10 @@ function Users({ s }: { s: Settings }) {
               <span style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}><span style={{ width: 32, height: 32, flex: 'none', borderRadius: 999, background: '#f1f5f9', color: '#64748b', fontSize: 12, fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{u.name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()}</span><span style={{ minWidth: 0 }}><span style={{ display: 'block', fontWeight: 500 }}>{u.name}{u.title && <span style={{ fontWeight: 400, color: '#64748b' }}> · {u.title}</span>}</span><span className="ellipsis" style={{ display: 'block', fontSize: 13, color: '#64748b' }}>{u.email}</span></span></span>
               <select disabled={self || !has('user.manage')} value={u.role} onChange={e => act(`settings/users/${u.id}`, { role: e.target.value }, { method: 'PATCH' })} style={{ height: 36, border: '1px solid #cbd5e1', borderRadius: 8, padding: '0 8px', fontSize: 14, background: '#fff' }}>{s.roles.map(r => <option key={r.id}>{r.name}</option>)}</select>
               <select aria-label={`What ${u.name} can see`} disabled={!has('user.manage') || u.role === 'Owner'} title={u.role === 'Owner' ? 'The Owner always sees every entity and unit.' : undefined} value={u.role === 'Owner' ? 'all' : u.scope} onChange={e => act(`settings/users/${u.id}`, { scope: e.target.value }, { method: 'PATCH' })} style={{ height: 36, minWidth: 0, border: '1px solid #cbd5e1', borderRadius: 8, padding: '0 8px', fontSize: 14, background: '#fff' }}>{scopeOpts.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}</select>
-              <span><Badge tone={tone[u.status]} dot>{u.status}</Badge></span>
+              <span style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}><Badge tone={tone[u.status]} dot>{u.status}</Badge>{u.mfa && <span title="Two-factor sign-in is on" aria-label="Two-factor on" style={{ display: 'inline-flex', alignItems: 'center', color: '#047857' }}><Icon name="shield-check" size={15} /></span>}</span>
               <span style={{ color: '#64748b' }}>{u.last}</span>
               <span style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 6 }}>
+                {has('user.manage') && u.mfa && !self && <button onClick={() => confirm(`Reset two-factor for ${u.name}? Use this when they’ve lost their phone. They sign in with their password and set it up again.`) && act(`settings/users/${u.id}/reset-mfa`)} title="Reset two-factor (lost phone)" aria-label={`Reset two-factor for ${u.name}`} className="outline-blue" style={{ width: 32, height: 32, border: '1px solid #e2e8f0', borderRadius: 8, background: '#fff', color: '#64748b', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="shield-off" size={14} /></button>}
                 {has('user.manage') && u.status !== 'Invited' && <button onClick={() => setDlg(u)} title="Edit details" aria-label={`Edit ${u.name}`} className="outline-blue" style={{ width: 32, height: 32, border: '1px solid #e2e8f0', borderRadius: 8, background: '#fff', color: '#64748b', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="pencil" size={14} /></button>}
                 {self ? <span style={{ fontSize: 13, color: '#94a3b8', width: 92, textAlign: 'center' }}>You</span> : <button className="btn btn-sec" onClick={() => act(`settings/users/${u.id}/toggle`)} style={{ height: 32, padding: '0 12px', fontSize: 13, boxShadow: 'none' }}>{u.status === 'Active' ? 'Deactivate' : u.status === 'Invited' ? 'Resend invite' : 'Reactivate'}</button>}
               </span>
@@ -334,14 +335,14 @@ function Roles({ s }: { s: Settings }) {
 }
 
 function Security({ s }: { s: Settings }) {
-  const act = useAct(); const [sec, setSec] = useState(s.security);
+  const act = useAct(); const { me } = useApp(); const [sec, setSec] = useState(s.security);
   useEffect(() => setSec(s.security), [s.security]);
   const t = (k: string, label: string, desc: string) => <ToggleRow key={k} label={label} desc={desc} on={!!s.security[k]} onClick={() => act('settings/security', { [k]: !s.security[k], label, on: !s.security[k] }, { method: 'PATCH', quiet: true })} />;
   return <>
     <Card>
       <CardHead title="Sign-in" />
-      {t('mfaAll', 'Require two-factor sign-in for everyone', 'Authenticator app or passkey on every new device.')}
-      {t('mfaFin', 'Always require two-factor for Owner and Finance', 'Applies even when the rule above is off.')}
+      {t('mfaAll', 'Require two-factor sign-in for everyone', `A code from an authenticator app at every sign-in. Anyone without it sets it up next time they sign in.${me.demo ? ' Not enforced in the sample workspace.' : ''}`)}
+      {t('mfaFin', 'Always require two-factor for Owner and Finance', 'Applies even when the rule above is off. Lost phone? An admin can reset it from Users.')}
       {t('ssoGoogle', 'Allow sign-in with Google Workspace', 'Only for addresses on the allowed domains below.')}
       {t('newDevice', 'Email people when they sign in from a new device', '')}
     </Card>

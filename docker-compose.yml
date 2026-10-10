@@ -18,6 +18,9 @@ services:
 
   redis:
     image: redis:7-alpine
+    # Holds queued background jobs as well as caches: keep it on disk and never evict keys.
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory-policy", "noeviction"]
+    volumes: [redisdata:/data]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 3s
@@ -36,6 +39,11 @@ services:
       MIGRATE_DATABASE_URL: postgresql://bos:bos@db:5432/bos?schema=public
       REDIS_URL: redis://redis:6379
       JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
+      MFA_KEY: ${MFA_KEY:-}
+      # Plain http on localhost here; set COOKIE_SECURE=true behind HTTPS.
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      # Browser -> web (Next proxies /api) -> api: two hops.
+      TRUST_PROXY: 2
       DEMO_MODE: ${DEMO_MODE:-true}
       SEED_DEMO: ${SEED_DEMO:-true}
       WEB_ORIGIN: http://localhost:3000
@@ -61,4 +69,5 @@ services:
 
 volumes:
   pgdata:
+  redisdata:
   storage:

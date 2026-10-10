@@ -6,16 +6,18 @@ import { api, ApiError } from '@/lib/api';
 import { useAct, useApp, useQ } from '@/lib/app';
 import type { SetupState } from '@/lib/types';
 import { Btn, Icon } from './ui';
+import { Challenge, continueSignIn } from './mfa';
 
 const ini = (n: string) => n.trim().split(/\s+/).filter(Boolean).map(w => w[0]).join('').slice(0, 2).toUpperCase();
 const FLASH = 'bos_flash';
 /** Shown once after a full reload (switching organisation reloads the app so nothing from the last one lingers). */
 export const takeFlash = () => { try { const m = sessionStorage.getItem(FLASH); sessionStorage.removeItem(FLASH); return m; } catch { return null; } };
-const flashNext = (m: string) => { try { sessionStorage.setItem(FLASH, m); } catch { /* private mode */ } };
+export const flashNext = (m: string) => { try { sessionStorage.setItem(FLASH, m); } catch { /* private mode */ } };
 
 /** Switches the session to another organisation, then reloads so every cached record is dropped. */
 export async function switchOrg(id: string, name: string, setupDone?: boolean) {
-  await api('auth/switch', { body: { orgId: id } });
+  const r = await api<Partial<Challenge>>('auth/switch', { body: { orgId: id } });
+  if (r.mfa && r.ticket) return continueSignIn(r as Challenge); // that organisation asks for a code
   flashNext(`Switched to ${name}.`);
   location.href = setupDone === false ? '/setup' : '/';
 }
@@ -90,12 +92,12 @@ export function OrgWizard({ onClose, account = false }: { onClose: () => void; a
     const bad = emails.find(m => !EMAIL.test(m)); if (bad) return err(`${bad} isn’t a valid email address.`);
     setOb(o => ({ ...o, busy: true, err: '' }));
     try {
-      const r = await api<{ message: string }>('signup', { body: {
+      const r = await api<{ message: string } & Partial<Challenge>>('signup', { body: {
         name: ob.name.trim(), slug: ob.slug, currency: ob.currency, fy: ob.fy, entity: { name: ob.le.trim(), gst: ob.gst, gstin: ob.gst ? g : '', state: ob.state, address: ob.addr.trim() },
         numbering: { inv: ob.inv, qt: ob.qt, pattern: ob.pattern }, invites: ob.invites.filter(x => x.email.trim()),
         ...(account ? { account: { name: ob.you.trim(), email: ob.email.trim().toLowerCase(), password: ob.password } } : {}),
       } });
-      flashNext(r.message); location.href = '/setup';
+      flashNext(r.message); if (r.mfa && r.ticket) return continueSignIn(r as Challenge, 'setup'); location.href = '/setup';
     } catch (e) { err(e instanceof ApiError ? e.message : 'Something went wrong. Try again.'); }
   };
   const back = () => (ob.step ? setOb(o => ({ ...o, step: o.step - 1, err: '' })) : onClose());

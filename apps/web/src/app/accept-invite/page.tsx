@@ -2,6 +2,7 @@
 import { FormEvent, Suspense, useEffect, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { api, ApiError } from '@/lib/api';
+import { Challenge, continueSignIn } from '@/components/mfa';
 
 function Accept() {
   const token = useSearchParams().get('token') || '';
@@ -16,7 +17,11 @@ function Accept() {
     e.preventDefault(); setErr('');
     if (!info?.hasAccount && f.password !== f.confirm) return setErr('The passwords don’t match.');
     setBusy(true);
-    try { await api('auth/accept-invite', { body: { token, name: f.name, title: f.title, password: f.password } }); location.href = '/'; }
+    try {
+      const r = await api<Partial<Challenge>>('auth/accept-invite', { body: { token, name: f.name, title: f.title, password: f.password } });
+      if (r.mfa && r.ticket) return continueSignIn(r as Challenge); // the organisation asks for two-factor
+      location.href = '/';
+    }
     catch (x) { setErr(x instanceof ApiError ? x.message : 'Could not finish joining.'); setBusy(false); }
   };
   return (

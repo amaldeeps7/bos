@@ -11,8 +11,9 @@ import { MailService } from './mail.service';
 import { PdfService } from './pdf.service';
 import { MembersService } from './members.service';
 import { SessionService } from './session.service';
+import { QueueService } from './queue.service';
 
-const services = [RedisService, AccessService, AuditService, NotifyService, NumberingService, OrgService, MailService, PdfService, MembersService, SessionService];
+const services = [RedisService, AccessService, AuditService, NotifyService, NumberingService, OrgService, MailService, PdfService, MembersService, SessionService, QueueService];
 
 @Global()
 @Module({

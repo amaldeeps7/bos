@@ -9,6 +9,11 @@ export interface AuthUser {
   scope: Scope;
   /** sample workspace: "… as Meera (demo)" fallbacks allowed */
   demo: boolean;
+  /** the organisation's policy requires two-factor for this person */
+  mfa?: boolean;
+  /** this session passed a second factor */
+  otp?: boolean;
 }
 
-export interface TokenPayload { sub: string; org: string; mid: string }
+/** `amr` lists how the session was authenticated ("pwd", "otp"). `typ: 'mfa'` marks a short-lived challenge ticket, never a session. */
+export interface TokenPayload { sub: string; org: string; mid: string; amr?: string[]; typ?: 'mfa' }

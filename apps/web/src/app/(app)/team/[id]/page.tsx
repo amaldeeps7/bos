@@ -7,6 +7,7 @@ import type { Profile } from '@/lib/types';
 import { Back, Badge, Btn, Card, CardHead, Icon, Switch } from '@/components/ui';
 import { useOpenNewMeeting } from '@/components/dialogs';
 import { Face, PersonLink, ProfileDialog, STATUS_TONE } from '@/components/team';
+import { MfaCard } from '@/components/mfa';
 
 const tzShort = (tz: string) => { try { return new Intl.DateTimeFormat('en-IN', { timeZone: tz, timeZoneName: 'short' }).formatToParts(new Date()).find(p => p.type === 'timeZoneName')?.value || ''; } catch { return ''; } };
 const PREFS = [['remind', 'Meeting reminders', '10 minutes before, with the join link'], ['mention', 'Comments and mentions', 'When someone comments on your tasks'], ['digest', 'Daily digest', 'Your day at 8:30 am: meetings, due tasks, approvals']] as const;
@@ -92,6 +93,8 @@ export default function PersonPage() {
           </div>
         </Card>
       )}
+
+      {p.isMe && <MfaCard />}
 
       {editing && <ProfileDialog p={p} onClose={() => setEditing(false)} />}
     </>

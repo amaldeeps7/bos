@@ -1,15 +1,24 @@
 'use client';
 import { FormEvent, useEffect, useState } from 'react';
 import { api, ApiError } from '@/lib/api';
+import { Challenge, MfaStep, takeChallenge } from '@/components/mfa';
+import { flashNext } from '@/components/orgs';
 
 export default function Login() {
   const [email, setEmail] = useState('priya@democonsulting.in'); const [password, setPassword] = useState('');
   const [err, setErr] = useState(''); const [busy, setBusy] = useState(false);
   const [demo, setDemo] = useState<{ email: string; name: string; role: string }[]>([]);
-  useEffect(() => { api<typeof demo>('auth/demo-accounts').then(setDemo).catch(() => undefined); }, []);
+  const [challenge, setChallenge] = useState<Challenge | null>(null); const [reason, setReason] = useState<string | null>(null);
+  useEffect(() => { api<typeof demo>('auth/demo-accounts').then(setDemo).catch(() => undefined); setChallenge(takeChallenge()); setReason(new URLSearchParams(location.search).get('reason')); }, []);
+  // After the second step: brand-new organisations go to their checklist.
+  const done = (message?: string) => { if (message) flashNext(message); location.href = new URLSearchParams(location.search).get('next') === 'setup' ? '/setup' : '/'; };
   const submit = async (e?: FormEvent, as?: string) => {
     e?.preventDefault(); setBusy(true); setErr('');
-    try { await api('auth/login', { body: { email: as || email, password: as ? 'demo1234' : password } }); location.href = '/'; }
+    try {
+      const r = await api<Partial<Challenge>>('auth/login', { body: { email: as || email, password: as ? 'demo1234' : password } });
+      if (r.mfa && r.ticket) { setChallenge(r as Challenge); setBusy(false); setPassword(''); return; }
+      location.href = '/';
+    }
     catch (x) { setErr(x instanceof ApiError ? x.message : 'Could not sign in.'); setBusy(false); }
   };
   return (
@@ -19,6 +28,8 @@ export default function Login() {
           <span style={{ width: 36, height: 36, borderRadius: 9, backgroundImage: 'linear-gradient(135deg,#0052ff,#4d7cff)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14, fontWeight: 600 }}>BO</span>
           <div><p style={{ margin: 0, fontSize: 17, fontWeight: 600 }}>Business OS</p><p style={{ margin: 0, fontSize: 13, color: '#64748b' }}>Sign in to your workspace</p></div>
         </div>
+        {challenge ? <MfaStep challenge={challenge} onDone={done} onCancel={() => { setChallenge(null); history.replaceState(null, '', '/login'); }} /> : <>
+        {reason === '2fa' && <div role="status" style={{ display: 'flex', gap: 10, padding: '12px 14px', borderRadius: 10, background: '#eff4ff', border: '1px solid rgba(0,82,255,.2)', fontSize: 14, color: '#0f172a' }}><span className="icon-shield-check" aria-hidden style={{ color: '#0052ff', fontSize: 16, marginTop: 2 }} /><span>Your organisation now requires two-factor sign-in. Sign in again and we’ll help you set it up.</span></div>}
         <form onSubmit={submit} className="card" style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 14 }}>
           <label className="label">Work email<input className="input" type="email" autoComplete="username" value={email} onChange={e => setEmail(e.target.value)} /></label>
           <label className="label">Password<input className="input" type="password" autoComplete="current-password" value={password} onChange={e => setPassword(e.target.value)} autoFocus /></label>
@@ -37,6 +48,7 @@ export default function Login() {
             ))}
           </div>
         )}
+        </>}
       </div>
     </div>
   );

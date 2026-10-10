@@ -3,6 +3,7 @@ import { AREA_MODULE } from '@bos/shared';
 import { PrismaService } from './prisma.service';
 import { RedisService } from './redis.service';
 import type { AuthUser } from './auth.types';
+import { mfaRequired } from './mfa';
 import { orgId, Scope } from './tenant';
 
 /** Loads a user's effective access (role permissions + switched-on modules), cached in Redis. */
@@ -22,7 +23,7 @@ export class AccessService {
     const modules = await this.modules();
     const scope: Scope = role.builtIn || !u.scope ? { all: true } : (u.scope as unknown as Scope);
     return { id: u.id, accountId: u.accountId, orgId: o, name: u.name, email: u.email, title: u.title, roleId: u.roleId, roleName: role.name, builtIn: role.builtIn,
-      perms: role.perms, modules, scope, demo: org.demo && process.env.DEMO_MODE === 'true' };
+      perms: role.perms, modules, scope, demo: org.demo && process.env.DEMO_MODE === 'true', mfa: mfaRequired(org, role.name) };
   }
 
   async role(roleId: string): Promise<{ name: string; builtIn: boolean; perms: string[] }> {

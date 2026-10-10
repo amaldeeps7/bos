@@ -76,7 +76,9 @@ model Account {
   email        String       @unique
   name         String
   passwordHash String?
-  mfaSecret    String?
+  mfaSecret    String? // TOTP secret, encrypted (AES-256-GCM); set = two-factor is on
+  mfaBackup    String[]     @default([]) // SHA-256 of the unused backup codes
+  mfaStep      Int          @default(0) // last 30-second step accepted, so a code can't be replayed
   lastOrgId    String?
   createdAt    DateTime     @default(now())
   memberships  Membership[]

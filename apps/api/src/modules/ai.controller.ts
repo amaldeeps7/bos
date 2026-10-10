@@ -10,6 +10,7 @@ import { AccessService } from '../core/access.service';
 import { Me, Perm } from '../core/decorators';
 import type { AuthUser } from '../core/auth.types';
 import { d, str } from '../core/util';
+import { Limit } from '../core/rate-limit';
 import { FinanceService } from './finance.service';
 
 type Action = { label: string; kind: 'navigate' | 'reassign' | 'copy' | 'remind'; payload?: Record<string, string> };
@@ -43,7 +44,7 @@ export class AiController {
     return { c, projects, tasks, approvals, users, invoices, quotes, opps, assets, catalog, roles, legacy, name };
   }
 
-  @Post('suggest') @HttpCode(200) @Perm('ai.use')
+  @Post('suggest') @HttpCode(200) @Perm('ai.use') @Limit('ai-ask', 60, 60, 'user')
   async suggest(@Me() me: AuthUser, @Body() b: any): Promise<Reply> {
     await this.count();
     const key = str(b.key, 'key', { required: true });
@@ -157,7 +158,7 @@ export class AiController {
   status() { return { agent: this.agent.enabled, model: this.agent.enabled ? MODEL : null }; }
 
   /** Typed question without the agent (no API key, or as a fallback): answer with the closest built-in answer. */
-  @Post('ask') @HttpCode(200) @Perm('ai.use')
+  @Post('ask') @HttpCode(200) @Perm('ai.use') @Limit('ai-ask', 60, 60, 'user')
   async ask(@Me() me: AuthUser, @Body() b: any): Promise<Reply> {
     const q = str(b.question, 'Question', { max: 1000 }).trim();
     if (!q) throw new BadRequestException('Ask a question');
@@ -171,7 +172,7 @@ export class AiController {
    * The agent: streams its answer as Server-Sent Events. It reads records with tools (as you, inside your organisation)
    * and proposes changes you confirm in the panel. Without an API key this route isn't used (see GET ai/status).
    */
-  @Post('agent') @Perm('ai.use')
+  @Post('agent') @Perm('ai.use') @Limit('ai-agent', 20, 60, 'user')
   async agentAsk(@Me() me: AuthUser, @Body() b: any, @Req() req: Request, @Res() res: Response) {
     const q = str(b.question, 'Question', { max: 2000 }).trim();
     if (!q) throw new BadRequestException('Ask a question');

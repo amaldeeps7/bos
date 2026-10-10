@@ -266,7 +266,9 @@ async function main() {
   // Raman Advisory: Priya's own new organisation, on a trial, not set up yet (the design's second tenant).
   const RA = 'org_ra4821m1z6';
   await prisma.organization.create({ data: { id: RA, slug: 'ramanadvisory', name: 'Raman Advisory', plan: 'trial', trialEndsAt: new Date(Date.now() + 9 * 86400e3 - 3600e3), setupDone: false,
-    currency: 'INR', fyStart: 'April', ...orgDefaults('Raman Advisory') } });
+    currency: 'INR', fyStart: 'April', ...orgDefaults('Raman Advisory'),
+    // Sample data: the demo people can switch in without enrolling two-factor (new organisations require it for the Owner).
+    security: { ...orgDefaults('Raman Advisory').security, mfaFin: false } } });
   await tenant(RA);
   const raRoles: Record<string, string> = {};
   for (const [i, r] of DEFAULT_ROLES.entries()) raRoles[r.name] = (await prisma.role.create({ data: { name: r.name, desc: r.desc, builtIn: !!r.builtIn, perms: r.perms, sort: i } })).id;

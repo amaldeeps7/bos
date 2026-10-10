@@ -7,6 +7,7 @@ import { PrismaService } from '../core/prisma.service';
 import { MailService, htmlOf } from '../core/mail.service';
 import { orgId, runAs } from '../core/tenant';
 import type { AuthUser } from '../core/auth.types';
+import { QueueService } from '../core/queue.service';
 import { DocumentsService } from './documents.service';
 
 const TTL_DAYS = 7;
@@ -27,7 +28,10 @@ const csv = (rows: Record<string, unknown>[]) => {
 @Injectable()
 export class ExportService {
   private log = new Logger('Export');
-  constructor(private prisma: PrismaService, private mail: MailService, private docs: DocumentsService) {}
+  constructor(private prisma: PrismaService, private mail: MailService, private docs: DocumentsService, private queue: QueueService) {
+    queue.handle('export', (j: { orgId: string; id: string; me: { id: string; email: string; name: string } }) =>
+      runAs({ orgId: j.orgId, membershipId: j.me.id, scope: { all: true } }, () => this.build(j.id, j.me)));
+  }
 
   signedUrl(org: string, id: string, expiresAt: Date) {
     const exp = expiresAt.getTime();
@@ -37,9 +41,8 @@ export class ExportService {
 
   async start(me: AuthUser) {
     const x = await this.prisma.dataExport.create({ data: { requestedById: me.id, expiresAt: new Date(Date.now() + TTL_DAYS * 86400_000) } });
-    const org = orgId();
-    // Built in the background, as this organisation only.
-    setImmediate(() => runAs({ orgId: org, membershipId: me.id, scope: { all: true } }, () => this.build(x.id, me)).catch(e => this.log.error(e)));
+    // Built by a background worker, as this organisation only; retried if the worker restarts mid-way.
+    await this.queue.add('export', { orgId: orgId(), id: x.id, me: { id: me.id, email: me.email, name: me.name } }, { jobId: `export-${x.id}` });
     return x;
   }
 

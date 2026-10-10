@@ -11,6 +11,7 @@ import { MailService, fill, htmlOf } from '../core/mail.service';
 import { orgId, Scope } from '../core/tenant';
 import { MembersService } from '../core/members.service';
 import { FinanceService } from './finance.service';
+import { Limit } from '../core/rate-limit';
 import { planAllows, planOf } from '../core/plans';
 
 /** Stored scope → the Access to select's value: all | le:<id> | bu:<id>. */
@@ -42,7 +43,7 @@ export class SettingsController {
     const { today } = await this.orgs.ctx();
     const [org, entities, units, users, roles, series, sac, catalog, projects] = await Promise.all([
       this.org(), this.prisma.legalEntity.findMany({ orderBy: { name: 'asc' } }), this.prisma.businessUnit.findMany({ include: { entity: true, head: true } }),
-      this.prisma.membership.findMany({ include: { role: true }, orderBy: { createdAt: 'asc' } }), this.prisma.role.findMany({ orderBy: { sort: 'asc' } }),
+      this.prisma.membership.findMany({ include: { role: true, account: { select: { mfaSecret: true } } }, orderBy: { createdAt: 'asc' } }), this.prisma.role.findMany({ orderBy: { sort: 'asc' } }),
       this.prisma.series.findMany(), this.prisma.sac.findMany({ orderBy: { code: 'asc' } }), this.prisma.catalogItem.findMany(), this.prisma.project.findMany({ select: { unitId: true } }),
     ]);
     const entityOrder = (id: string | null) => (id ? entities.findIndex(e => e.id === id) : -1);
@@ -52,7 +53,7 @@ export class SettingsController {
       security: org.security, policy: org.policy, taxOpts: org.taxOpts, reminders: org.reminders, templates: org.templates,
       entities: entities.map(e => ({ ...e, stateCode: e.state, state: placeOf(e) || 'Unrecognised code' })),
       units: units.map(u => ({ id: u.id, name: u.name, code: u.code, entity: u.entity.name, entityId: u.entityId, headId: u.headId, head: u.head?.name || 'Not set', projects: projects.filter(p => p.unitId === u.id).length })),
-      users: users.map(u => ({ id: u.id, name: u.name, email: u.email, title: u.title, role: u.role.name, scope: scopeKey(u.scope, u.role.builtIn), status: u.status, last: u.status === 'Invited' ? '—' : lastActive(u.lastActiveAt) })),
+      users: users.map(u => ({ id: u.id, name: u.name, email: u.email, title: u.title, role: u.role.name, mfa: !!u.account.mfaSecret, scope: scopeKey(u.scope, u.role.builtIn), status: u.status, last: u.status === 'Invited' ? '—' : lastActive(u.lastActiveAt) })),
       roles: roles.map(r => ({ id: r.id, name: r.name, desc: r.desc, builtIn: r.builtIn, perms: r.builtIn ? ALL_PERMS : r.perms })),
       // One row per type and issuing entity, in the design's order.
       series: ['INVOICE', 'QUOTATION', 'CREDIT_NOTE', 'RECEIPT', 'PROJECT'].flatMap(t => series.filter(s => s.type === t).sort((a, b) => entityOrder(a.entityId) - entityOrder(b.entityId)))
@@ -200,6 +201,20 @@ export class SettingsController {
     return { message: msgs.join(' ') || `${data.name || before.name} saved.` };
   }
 
+  /** Someone lost their phone: turn their two-factor off so they can sign in and set it up again.
+      Only for accounts that belong to this organisation alone, so one organisation can't weaken another's sign-in. */
+  @Post('users/:id/reset-mfa') @HttpCode(200) @Perm('user.manage')
+  async resetMfa(@Me() me: AuthUser, @Param('id') id: string) {
+    if (id === me.id) throw new BadRequestException('Turn your own two-factor off from your profile.');
+    const u = await this.prisma.membership.findUniqueOrThrow({ where: { id }, include: { account: true } });
+    if (!u.account.mfaSecret) throw new BadRequestException(`${u.name} doesn’t have two-factor on.`);
+    const [{ n }] = await this.prisma.$queryRaw<{ n: number }[]>`SELECT account_org_count(${u.accountId}) AS n`;
+    if (Number(n) > 1) throw new BadRequestException(`${u.name} also uses Business OS with another organisation, so only they can reset it (with a backup code).`);
+    await this.prisma.account.update({ where: { id: u.accountId }, data: { mfaSecret: null, mfaBackup: [], mfaStep: 0 } });
+    await this.audit.log(me, `Reset two-factor sign-in for ${u.name}`, 'icon-shield-off', 'access');
+    return { message: `${u.name} can sign in with their password and will be asked to set two-factor up again.` };
+  }
+
   @Post('users/:id/toggle') @HttpCode(200) @Perm('user.read')
   async userToggle(@Me() me: AuthUser, @Param('id') id: string) {
     if (id === me.id) throw new BadRequestException('You can’t deactivate yourself');
@@ -240,7 +255,7 @@ export class SettingsController {
     if (n <= 1) await this.prisma.account.update({ where: { id: accountId }, data: { name } });
   }
 
-  @Post('users/invite') @Perm('user.invite')
+  @Post('users/invite') @Perm('user.invite') @Limit('invite', 50, 3600, 'org')
   async invite(@Me() me: AuthUser, @Body() b: any) {
     const email = str(b.email, 'Email', { max: 200 }).trim().toLowerCase();
     const role = await this.prisma.role.findFirst({ where: { name: str(b.role, 'Role', { required: true }) } }); if (!role) throw new BadRequestException('Unknown role');
@@ -251,7 +266,7 @@ export class SettingsController {
     return { message: r.ok ? `Invitation emailed to ${email}.` : `${email} added as invited, but the email wasn’t sent: ${r.error}` };
   }
   /** Adds someone directly with a password the admin sets; they can sign in straight away. */
-  @Post('users') @Perm('user.manage')
+  @Post('users') @Perm('user.manage') @Limit('invite', 50, 3600, 'org')
   async addUser(@Me() me: AuthUser, @Body() b: any) {
     const email = str(b.email, 'Email', { max: 200 }).trim().toLowerCase();
     const name = str(b.name, 'Name', { max: 120 }).trim(); if (!name) throw new BadRequestException('Enter their name.');

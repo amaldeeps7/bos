@@ -24,6 +24,7 @@ import { SchedulerService } from './modules/scheduler.service';
 import { SearchController } from './modules/search.controller';
 import { OrgsController } from './modules/orgs.controller';
 import { AgentService } from './modules/agent/agent.service';
+import { RateLimitGuard } from './core/rate-limit';
 import { ExportService } from './modules/export.service';
 
 @Controller('health')
@@ -38,7 +39,7 @@ class HealthController {
   controllers: [HealthController, AuthController, PeopleController, TasksController, MeetingsController, ApprovalsController,
     CustomersController, OpportunitiesController, CatalogController, QuotesController, InvoicesController, PaymentsController, CreditNotesController,
     ProjectsController, AssetsController, ReportsController, SettingsController, AiController, SearchController, TeamController, OrgsController],
-  providers: [{ provide: APP_GUARD, useClass: AuthGuard }, { provide: APP_FILTER, useClass: PrismaErrorsFilter }, FinanceService, ApprovalsService, DocumentsService, SchedulerService, ExportService, AgentService, SearchController],
+  providers: [{ provide: APP_GUARD, useClass: AuthGuard }, { provide: APP_GUARD, useClass: RateLimitGuard }, { provide: APP_FILTER, useClass: PrismaErrorsFilter }, FinanceService, ApprovalsService, DocumentsService, SchedulerService, ExportService, AgentService, SearchController],
 })
 export class AppModule implements NestModule {
   configure(consumer: MiddlewareConsumer) { consumer.apply(TenantMiddleware).forRoutes('*'); }

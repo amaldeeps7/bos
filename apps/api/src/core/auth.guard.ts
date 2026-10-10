@@ -31,7 +31,8 @@ export class AuthGuard implements CanActivate {
     if (!token) { if (isPublic) return true; throw new UnauthorizedException('Sign in to continue'); }
     let p: TokenPayload;
     try { p = await this.jwt.verifyAsync<TokenPayload>(token); } catch { if (isPublic) return true; throw new UnauthorizedException('Your session has ended. Sign in again.'); }
-    if (!p.org || !p.mid) { if (isPublic) return true; throw new UnauthorizedException('Your session has ended. Sign in again.'); }
+    // A two-factor challenge ticket is not a session.
+    if (!p.org || !p.mid || p.typ) { if (isPublic) return true; throw new UnauthorizedException('Your session has ended. Sign in again.'); }
     // The tenant comes from the token, which only /auth/login, /auth/switch and /signup issue after checking membership.
     const c = tenant();
     if (!c) throw new Error('TenantMiddleware is not installed');
@@ -43,7 +44,10 @@ export class AuthGuard implements CanActivate {
       throw new UnauthorizedException('You no longer have access to this organisation');
     }
     c.scope = user.scope;
+    user.otp = !!p.amr?.includes('otp');
     req.user = user;
+    // Policy says two-factor and this session didn't pass it (signed in before the rule, or before enrolling): sign in again.
+    if (user.mfa && !user.otp && !isPublic) throw new UnauthorizedException({ statusCode: 401, code: 'mfa_required', message: 'Your organisation requires two-factor sign-in. Sign in again to set it up.' });
     const need = this.reflector.getAllAndOverride<string[]>(PERMS, targets) || [];
     for (const perm of need) if (!AccessService.has(user, perm)) throw new ForbiddenException(`You don't have permission: ${perm}`);
     return true;

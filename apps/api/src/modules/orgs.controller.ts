@@ -15,6 +15,7 @@ import { DEFAULT_SAC, PLANS, TRIAL_DAYS, orgDefaults, planAllows, planOf } from 
 import { orgId, runAs } from '../core/tenant';
 import { gstParty, str } from '../core/util';
 import { ExportService } from './export.service';
+import { Limit } from '../core/rate-limit';
 import { ini, planLabel } from './auth.controller';
 
 const SLUG = /^[a-z0-9](?:[a-z0-9-]{1,28}[a-z0-9])$/;
@@ -34,7 +35,7 @@ export class OrgsController {
   private owner(me: AuthUser) { if (!me.builtIn) throw new ForbiddenException('Only the Owner can do that.'); }
   private org() { return this.prisma.organization.findUniqueOrThrow({ where: { id: orgId() } }); }
 
-  @Public() @Get('signup/slug/:slug')
+  @Public() @Get('signup/slug/:slug') @Limit('slug', 60, 60)
   async slugFree(@Param('slug') slug: string) {
     const s = String(slug).toLowerCase();
     return { ok: SLUG.test(s) && !RESERVED.has(s) && !(await this.prisma.organization.findUnique({ where: { slug: s } })) };
@@ -44,7 +45,7 @@ export class OrgsController {
    * Creates an organisation in one transaction: Owner role and membership, default roles, modules, SAC list,
    * one legal entity and its numbering series. Signed in: adds it to your organisations. Signed out: also creates your account.
    */
-  @Public() @Post('signup')
+  @Public() @Post('signup') @Limit('signup', 5, 3600)
   async signup(@Req() req: any, @Body() b: any, @Res({ passthrough: true }) res: Response) {
     const me: AuthUser | undefined = req.user;
     const name = str(b.name, 'Organisation name', { max: 120 }).trim(); if (!name) throw new BadRequestException('Give the organisation a name.');
@@ -102,8 +103,10 @@ export class OrgsController {
       }
     });
     const org = await this.prisma.organization.findUniqueOrThrow({ where: { id } });
-    await this.session.issue(res, account.id, made.owner.id, org);
-    return { ok: true, id, slug, invited, message: `${name} is ready. You’re its Owner.` };
+    // The new organisation's policy may ask the Owner for two-factor (on by default); a signed-in creator keeps theirs.
+    const acc = await this.prisma.account.findUniqueOrThrow({ where: { id: account.id } });
+    const challenge = await this.session.enter(res, acc, { id: made.owner.id, role: { name: 'Owner' } }, org, !!me?.otp);
+    return { ok: true, id, slug, invited, message: `${name} is ready. You’re its Owner.`, ...(challenge || {}) };
   }
 
   /** Organisations the signed-in account belongs to (for the switcher). */
@@ -206,7 +209,7 @@ export class OrgsController {
     };
   }
 
-  @Post('orgs/current/export') @Perm('settings.manage')
+  @Post('orgs/current/export') @Perm('settings.manage') @Limit('export', 5, 3600, 'org')
   async export(@Me() me: AuthUser) {
     const x = await this.exports.start(me);
     await this.audit.log(me, 'Requested a full data export', 'icon-download', 'access');
@@ -214,7 +217,7 @@ export class OrgsController {
   }
 
   /** Signed, expiring download link (no session needed: it's emailed). */
-  @Public() @Get('exports/:org/:id')
+  @Public() @Get('exports/:org/:id') @Limit('download', 30, 600)
   async download(@Param('org') org: string, @Param('id') id: string, @Query('exp') exp: string, @Query('sig') sig: string, @Res() res: Response) {
     const file = await this.exports.open(org, id, Number(exp), String(sig || ''));
     res.setHeader('Content-Type', 'application/zip');
