@@ -1,0 +1,62 @@
+# Staging / production on one server: Caddy serves HTTPS on 80/443 and is the only thing exposed.
+#
+#   cp deploy/.env.production.example .env      # then fill it in (see deploy/README.md)
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+#
+# Everything else (Postgres, Redis, the API, the web app, Mailpit) is reachable only inside Docker's network.
+services:
+  db:
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    restart: unless-stopped
+
+  redis:
+    restart: unless-stopped
+
+  # Catches outgoing email when SMTP_URL isn't set. Not published; see deploy/caddy-extra to view it behind a password.
+  mailpit:
+    ports: !reset []
+    restart: unless-stopped
+
+  api:
+    environment:
+      DATABASE_URL: postgresql://bos_app:${APP_DB_PASSWORD:?set APP_DB_PASSWORD in .env}@db:5432/bos?schema=public
+      MIGRATE_DATABASE_URL: postgresql://bos:${POSTGRES_PASSWORD}@db:5432/bos?schema=public
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
+      MFA_KEY: ${MFA_KEY:?set MFA_KEY in .env}
+      WEB_ORIGIN: https://${DOMAIN:?set DOMAIN in .env}
+      COOKIE_SECURE: "true"
+      # Hops in front of the API: the web app's /api proxy and Caddy (Caddy ignores X-Forwarded-For sent by the client).
+      TRUST_PROXY: 2
+      DEMO_MODE: ${DEMO_MODE:-false}
+      SEED_DEMO: ${SEED_DEMO:-false}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      SMTP_URL: ${SMTP_URL:-smtp://mailpit:1025}
+      EMAIL_FROM: ${EMAIL_FROM:?set EMAIL_FROM in .env}
+    ports: !reset []
+    restart: unless-stopped
+
+  web:
+    ports: !reset []
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2.8-alpine
+    depends_on: [web]
+    ports: ["80:80", "443:443", "443:443/udp"]
+    environment:
+      DOMAIN: ${DOMAIN}
+      ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL in .env (for HTTPS certificate notices)}
+      MAIL_DOMAIN: ${MAIL_DOMAIN:-}
+      MAIL_USER: ${MAIL_USER:-admin}
+      MAIL_PASSWORD_HASH: ${MAIL_PASSWORD_HASH:-}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./deploy/caddy-extra:/etc/caddy/extra:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    restart: unless-stopped
+
+volumes:
+  caddy_data:
+  caddy_config:

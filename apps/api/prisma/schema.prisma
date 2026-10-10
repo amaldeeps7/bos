@@ -22,6 +22,8 @@ model Organization {
   region       String    @default("ap-south-1")
   trialEndsAt  DateTime?
   closedAt     DateTime?
+  aiKey        String? // the organisation's own Anthropic API key, encrypted (AES-256-GCM); overrides the server's
+  aiKeyHint    String? // last four characters, to show which key is set
   demo         Boolean   @default(false) // sample workspace: allows "Approve as … (demo)" actions
   setupDone    Boolean   @default(true) // false shows the Get started checklist
   billingEmail String    @default("")

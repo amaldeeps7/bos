@@ -1,0 +1,51 @@
+# Deploys the `staging` branch to the staging server on every push (or by hand from the Actions tab).
+# Repository secrets: STAGING_HOST, STAGING_USER, STAGING_SSH_KEY (private key whose public half is in the server
+# user's ~/.ssh/authorized_keys), and optionally STAGING_PORT and STAGING_DIR (default /opt/bos).
+name: Deploy staging
+on:
+  push:
+    branches: [staging]
+  workflow_dispatch:
+concurrency:
+  group: deploy-staging
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build:shared && pnpm --filter @bos/shared test
+      - run: pnpm --filter @bos/api exec prisma generate
+      - run: pnpm typecheck
+
+  deploy:
+    needs: check
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.STAGING_HOST }}
+          username: ${{ secrets.STAGING_USER }}
+          key: ${{ secrets.STAGING_SSH_KEY }}
+          port: ${{ secrets.STAGING_PORT || 22 }}
+          command_timeout: 30m
+          script: |
+            set -e
+            cd "${{ secrets.STAGING_DIR || '/opt/bos' }}"
+            git fetch --prune origin staging
+            git reset --hard origin/staging
+            C="docker compose -f docker-compose.yml -f docker-compose.prod.yml"
+            $C up -d --build --remove-orphans
+            # Wait for the API (it runs migrations on start) to answer.
+            for i in $(seq 1 60); do
+              if $C exec -T api node -e "fetch('http://localhost:4000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"; then echo "healthy"; break; fi
+              [ "$i" = 60 ] && { $C logs --tail 80 api; exit 1; }
+              sleep 5
+            done
+            docker image prune -f

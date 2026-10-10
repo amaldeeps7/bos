@@ -9,6 +9,8 @@ import type { AuthUser } from '../../core/auth.types';
 import { FinanceService } from '../finance.service';
 import { SearchController } from '../search.controller';
 import { AgentTools, Proposal, toolsFor, validate } from './agent.tools';
+import { openSecret } from '../../core/secrets';
+import { createHash } from 'crypto';
 
 export const MODEL = process.env.ANTHROPIC_MODEL || 'claude-opus-5-5';
 const MAX_STEPS = 10;         // model calls per question
@@ -35,16 +37,30 @@ Keep replies short and plain: a sentence or two, then a short list if useful. No
 @Injectable()
 export class AgentService {
   private log = new Logger('Agent');
-  /** Replaced in tests with a scripted client. */
+  /** The server's key (ANTHROPIC_API_KEY), used by organisations that haven't connected their own. Replaced in tests with a scripted client. */
   client: Pick<Anthropic, 'beta'> | null = process.env.ANTHROPIC_API_KEY ? new Anthropic() : null;
+  private own = new Map<string, Anthropic>(); // per-organisation clients, keyed by a hash of the key
+
+  /** Which key answers for the current organisation: its own (Settings → AI assistant), else the server's, else none. */
+  async clientFor(): Promise<{ client: Pick<Anthropic, 'beta'>; source: 'organisation' | 'server' } | null> {
+    const org = await this.prisma.organization.findUnique({ where: { id: orgId() }, select: { aiKey: true } });
+    if (org?.aiKey) {
+      const key = openSecret(org.aiKey); const id = createHash('sha256').update(key).digest('hex');
+      if (!this.own.has(id)) { if (this.own.size > 500) this.own.clear(); this.own.set(id, new Anthropic({ apiKey: key })); }
+      return { client: this.own.get(id)!, source: 'organisation' };
+    }
+    return this.client ? { client: this.client, source: 'server' } : null;
+  }
 
   constructor(private prisma: PrismaService, private redis: RedisService, private orgs: OrgService, private fin: FinanceService, private search: SearchController) {}
 
-  get enabled() { return !!this.client; }
+  async enabled() { return !!(await this.clientFor()); }
   private key(me: AuthUser, conv: string) { return `bos:${orgId()}:agent:${me.id}:${conv}`; }
 
   async run(me: AuthUser, conversationId: string, question: string, page: string, emit: (e: AgentEvent) => void, signal: AbortSignal) {
-    if (!this.client) throw new Error('agent not configured');
+    const picked = await this.clientFor();
+    if (!picked) throw new Error('agent not configured');
+    const client = picked.client;
     const { org, today } = await this.orgs.ctx();
     let conv = /^[a-z0-9-]{8,64}$/i.test(conversationId) ? conversationId : crypto.randomUUID();
     let history = (await this.redis.getJSON<Anthropic.Beta.BetaMessageParam[]>(this.key(me, conv))) || [];
@@ -61,7 +77,7 @@ export class AgentService {
     try {
       for (let step = 0; step < MAX_STEPS; step++) {
         if (signal.aborted) break;
-        const stream = this.client.beta.messages.stream({
+        const stream = client.beta.messages.stream({
           model: MODEL, max_tokens: 16000, system: SYSTEM, tools, messages: history,
           thinking: { type: 'adaptive' }, output_config: { effort: 'medium' },
           cache_control: { type: 'ephemeral' },

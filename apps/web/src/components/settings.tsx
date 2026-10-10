@@ -83,8 +83,38 @@ function Org({ s }: { s: Settings }) {
         <Kv k="Signed in as" v={me.user.email} />
       </div>
     </Card>
+    <AiKey />
     {me.user.roleName === 'Owner' && me.user.builtIn && <HandOver s={s} />}
   </>;
+}
+
+/** Settings → AI assistant: connect Claude with the organisation's own Anthropic key (Owner only). */
+function AiKey() {
+  const act = useAct(); const { me } = useApp(); const owner = me.user.roleName === 'Owner' && me.user.builtIn;
+  const q = useQ<{ source: 'organisation' | 'server' | 'none'; hint: string | null; serverKey: boolean; model: string | null }>('ai/key'); const st = q.data;
+  const [key, setKey] = useState(''); const [open, setOpen] = useState(false); const [busy, setBusy] = useState(false);
+  if (!st) return null;
+  const status = st.source === 'organisation' ? `Connected with your key (ending ${st.hint}).` : st.source === 'server' ? 'Connected with the server’s key. Add your own to use your Anthropic account instead.' : 'Not connected. The assistant gives built-in answers to common questions (plan my day, who owes us, what’s at risk).';
+  const save = async () => { setBusy(true); const r = await act('ai/key', { key }, { method: 'PUT' }); setBusy(false); if (r) { setKey(''); setOpen(false); q.refetch(); } };
+  return (
+    <Card>
+      <CardHead title="AI assistant" sub={<span style={{ display: 'block', maxWidth: '70ch' }}>{status}</span>}
+        right={owner && !open && <div style={{ display: 'flex', gap: 8 }}>
+          {st.source === 'organisation' && <Btn size="sm" onClick={async () => { if (confirm('Remove the key? The assistant goes back to the server’s key, or to built-in answers.')) { await act('ai/key', undefined, { method: 'DELETE' }); q.refetch(); } }}>Remove key</Btn>}
+          <Btn size="sm" kind={st.source === 'organisation' ? 'sec' : 'pri'} icon="sparkles" onClick={() => setOpen(true)}>{st.source === 'organisation' ? 'Replace key' : 'Connect Claude'}</Btn></div>} />
+      {open && (
+        <div style={{ padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 560 }}>
+          <ol style={{ margin: 0, paddingLeft: 18, fontSize: 14, color: '#334155', display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <li>Sign in to the <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noreferrer" className="link">Anthropic Console</a> and create an API key (add billing there; usage is charged to your Anthropic account).</li>
+            <li>Paste it below. We check it with Anthropic, store it encrypted, and only ever show its last four characters.</li>
+          </ol>
+          <label className="label">Anthropic API key<input className="input mono" type="password" autoComplete="off" value={key} onChange={e => setKey(e.target.value.trim())} placeholder="sk-ant-…" /></label>
+          <div style={{ display: 'flex', gap: 8 }}><Btn onClick={() => { setOpen(false); setKey(''); }}>Cancel</Btn><Btn kind="pri" onClick={save} disabled={busy || !key}>{busy ? 'Checking…' : 'Save and connect'}</Btn></div>
+        </div>
+      )}
+      {!owner && <p style={{ margin: 0, padding: '0 20px 16px', fontSize: 13, color: '#64748b' }}>Only the Owner can connect or change the key.</p>}
+    </Card>
+  );
 }
 
 /** The Owner gives the organisation to another active member and picks their own new role. */

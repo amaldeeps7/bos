@@ -1,0 +1,18 @@
+# Caddy: HTTPS for the app, with certificates from Let's Encrypt fetched and renewed automatically.
+{
+	email {$ACME_EMAIL}
+}
+
+{$DOMAIN} {
+	encode zstd gzip
+	# The web app serves the pages and forwards /api to the API inside Docker (the assistant's streaming answers pass straight through).
+	reverse_proxy web:3000
+	header -Server
+	log {
+		output stdout
+		format console
+	}
+}
+
+# Optional extra sites (e.g. Mailpit behind a password): any *.caddy file in deploy/caddy-extra.
+import /etc/caddy/extra/*.caddy

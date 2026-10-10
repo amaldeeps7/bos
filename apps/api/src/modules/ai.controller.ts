@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, Get, HttpCode, Logger, Post, Req, Res } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Delete, ForbiddenException, Get, HttpCode, Logger, Post, Put, Req, Res } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { AgentEvent, AgentService, MODEL } from './agent/agent.service';
 import Anthropic from '@anthropic-ai/sdk';
@@ -12,6 +12,8 @@ import type { AuthUser } from '../core/auth.types';
 import { d, str } from '../core/util';
 import { Limit } from '../core/rate-limit';
 import { FinanceService } from './finance.service';
+import { AuditService } from '../core/audit.service';
+import { sealSecret } from '../core/secrets';
 
 type Action = { label: string; kind: 'navigate' | 'reassign' | 'copy' | 'remind'; payload?: Record<string, string> };
 type Reply = { text: string; bullets?: string[]; action?: Action };
@@ -25,7 +27,44 @@ type Reply = { text: string; bullets?: string[]; action?: Action };
 export class AiController {
   private log = new Logger('AI');
 
-  constructor(private prisma: PrismaService, private fin: FinanceService, private redis: RedisService, private agent: AgentService) {}
+  constructor(private prisma: PrismaService, private fin: FinanceService, private redis: RedisService, private agent: AgentService, private audit: AuditService) {}
+
+  // ── Settings → AI assistant: the organisation's own Anthropic key ─────────────────
+
+  private owner(me: AuthUser) { if (!(me.roleName === 'Owner' && me.builtIn)) throw new ForbiddenException('Only the Owner can change the assistant’s API key: usage is billed to whoever owns the key.'); }
+
+  /** How the assistant is connected here (never the key itself). */
+  @Get('key') @Perm('settings.manage')
+  async keyStatus() {
+    const org = await this.prisma.organization.findUniqueOrThrow({ where: { id: orgId() }, select: { aiKey: true, aiKeyHint: true } });
+    const picked = await this.agent.clientFor();
+    return { source: picked?.source || 'none', hint: org.aiKey ? org.aiKeyHint : null, serverKey: !!this.agent.client, model: picked ? MODEL : null };
+  }
+
+  /** Saves the organisation's key after checking it with Anthropic. Stored encrypted; only its last four characters are shown again. */
+  @Put('key') @Perm('settings.manage') @Limit('ai-key', 10, 3600, 'org')
+  async setKey(@Me() me: AuthUser, @Body() b: any) {
+    this.owner(me);
+    const key = str(b.key, 'API key', { required: true, max: 300 }).trim();
+    if (!/^sk-ant-[A-Za-z0-9_-]{20,}$/.test(key)) throw new BadRequestException('That doesn’t look like an Anthropic API key (it starts with “sk-ant-”).');
+    try { await new Anthropic({ apiKey: key, maxRetries: 0, timeout: 15_000 }).models.list({ limit: 1 }); }
+    catch (e) {
+      if (e instanceof Anthropic.AuthenticationError || e instanceof Anthropic.PermissionDeniedError) throw new BadRequestException('Anthropic rejected that key. Check it in the Anthropic Console and try again.');
+      this.log.warn(`could not verify an API key: ${(e as Error).message}`);
+      throw new BadRequestException('Couldn’t reach Anthropic to check the key. Try again in a moment.');
+    }
+    await this.prisma.organization.update({ where: { id: orgId() }, data: { aiKey: sealSecret(key), aiKeyHint: key.slice(-4) } });
+    await this.audit.log(me, `Connected the assistant with an Anthropic API key ending ${key.slice(-4)}`, 'icon-sparkles', 'settings');
+    return { message: 'Connected. The assistant now answers any question, using your key.' };
+  }
+
+  @Delete('key') @Perm('settings.manage')
+  async removeKey(@Me() me: AuthUser) {
+    this.owner(me);
+    await this.prisma.organization.update({ where: { id: orgId() }, data: { aiKey: null, aiKeyHint: null } });
+    await this.audit.log(me, 'Removed the assistant’s Anthropic API key', 'icon-sparkles', 'settings');
+    return { message: this.agent.client ? 'Key removed. The assistant uses the server’s key again.' : 'Key removed. The assistant is back to its built-in answers.' };
+  }
 
   /** Counts assistant requests per organisation per month (Settings → Plan & billing → Usage). */
   private count() { return this.redis.hit(`bos:${orgId()}:ai:${new Date().toISOString().slice(0, 7)}`, 40 * 86400); }
@@ -155,7 +194,7 @@ export class AiController {
   /** Free-text question, answered by Claude from the records this person can see. */
   /** Whether typed questions go to the Claude agent (API key set) or are matched to the built-in answers. */
   @Get('status') @Perm('ai.use')
-  status() { return { agent: this.agent.enabled, model: this.agent.enabled ? MODEL : null }; }
+  async status() { const on = await this.agent.enabled(); return { agent: on, model: on ? MODEL : null }; }
 
   /** Typed question without the agent (no API key, or as a fallback): answer with the closest built-in answer. */
   @Post('ask') @HttpCode(200) @Perm('ai.use') @Limit('ai-ask', 60, 60, 'user')
@@ -164,8 +203,8 @@ export class AiController {
     if (!q) throw new BadRequestException('Ask a question');
     const key = matchIntent(q, me);
     if (key) return this.suggest(me, { key, projectId: b.projectId });
-    return { text: this.agent.enabled ? 'The assistant couldn’t answer just now. Try again, or pick one of the suggestions below.'
-      : 'I can answer things like “plan my day”, “what’s at risk this week?”, “who owes us the most?” or “chase overdue invoices”. For any other question, an admin can connect Claude by setting ANTHROPIC_API_KEY on the API server.' };
+    return { text: (await this.agent.enabled()) ? 'The assistant couldn’t answer just now. Try again, or pick one of the suggestions below.'
+      : 'I can answer things like “plan my day”, “what’s at risk this week?”, “who owes us the most?” or “chase overdue invoices”. For any other question, the Owner can connect Claude in Settings → AI assistant.' };
   }
 
   /**
@@ -176,7 +215,7 @@ export class AiController {
   async agentAsk(@Me() me: AuthUser, @Body() b: any, @Req() req: Request, @Res() res: Response) {
     const q = str(b.question, 'Question', { max: 2000 }).trim();
     if (!q) throw new BadRequestException('Ask a question');
-    if (!this.agent.enabled) throw new BadRequestException('The agent isn’t configured on this server.');
+    if (!(await this.agent.enabled())) throw new BadRequestException('The assistant isn’t connected. The Owner can add an API key in Settings → AI assistant.');
     await this.count();
     res.status(200).set({ 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache, no-transform', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
     res.flushHeaders();
@@ -188,7 +227,7 @@ export class AiController {
     } catch (e) {
       if (!abort.signal.aborted) {
         if (e instanceof Anthropic.RateLimitError) send({ type: 'error', text: 'The assistant is busy right now. Try again in a moment.' });
-        else if (e instanceof Anthropic.AuthenticationError) { this.log.error('Anthropic API key was rejected'); send({ type: 'error', text: 'The assistant’s API key was rejected. An admin needs to check ANTHROPIC_API_KEY.' }); }
+        else if (e instanceof Anthropic.AuthenticationError) { this.log.error('Anthropic API key was rejected'); send({ type: 'error', text: 'The assistant’s API key was rejected. The Owner can check it in Settings → AI assistant.' }); }
         else if (e instanceof Anthropic.APIError) { this.log.warn(`Claude API error ${e.status}: ${e.message}`); send({ type: 'error', text: 'The assistant couldn’t answer just now.' }); }
         else { this.log.error(e); send({ type: 'error', text: 'Something went wrong while answering.' }); }
         // Fall back to the built-in answers when one fits.

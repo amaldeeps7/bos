@@ -425,7 +425,7 @@ describe('assistant: built-in answers without a key, agent with one', () => {
       const r = (await http().post('/api/ai/ask').set('Cookie', pm).send({ question: 'what is on my plate today?' }).expect(200)).body;
       expect(r.text).not.toMatch(/ANTHROPIC_API_KEY/);
       const none = (await http().post('/api/ai/ask').set('Cookie', pm).send({ question: 'tell me a joke' }).expect(200)).body;
-      expect(none.text).toMatch(/ANTHROPIC_API_KEY/);
+      expect(none.text).toMatch(/Settings → AI assistant/);
     } finally { agent.client = saved; }
   });
 
@@ -1042,5 +1042,37 @@ describe('lists: bulk changes, history, report periods', () => {
     expect((await http().get('/api/meetings').set('Cookie', pm)).body.some((x: any) => x.id === m.id)).toBe(false);
     const past = (await http().get('/api/meetings/past').set('Cookie', pm).expect(200)).body;
     expect(past.rows.some((x: any) => x.id === m.id)).toBe(true);
+  });
+});
+
+describe('AI assistant key in settings', () => {
+  const http = () => request(app.getHttpServer());
+  it('lets the Owner connect the organisation’s own key, stored encrypted and never shown', async () => {
+    const Anthropic = (await import('@anthropic-ai/sdk')).default;
+    const { AgentService } = await import('../src/modules/agent/agent.service');
+    const agent = app.get(AgentService); const saved = agent.client; agent.client = null; // no server key
+    const ok = jest.spyOn((Anthropic as any).Models.prototype, 'list').mockResolvedValue({ data: [] } as any);
+    try {
+      const owner = await login('anand@democonsulting.in'); const pm = await login('priya@democonsulting.in');
+      expect((await http().get('/api/ai/key').set('Cookie', owner).expect(200)).body).toMatchObject({ source: 'none', hint: null });
+      expect((await http().get('/api/ai/status').set('Cookie', pm)).body.agent).toBe(false);
+      const key = 'sk-ant-api03-' + 'x'.repeat(40) + 'WXYZ';
+      await http().put('/api/ai/key').set('Cookie', pm).send({ key }).expect(403); // Owner only
+      await http().put('/api/ai/key').set('Cookie', owner).send({ key: 'not-a-key' }).expect(400);
+      await http().put('/api/ai/key').set('Cookie', owner).send({ key }).expect(200);
+      const st = (await http().get('/api/ai/key').set('Cookie', owner)).body;
+      expect(st).toMatchObject({ source: 'organisation', hint: 'WXYZ' }); expect(JSON.stringify(st)).not.toContain(key);
+      const row = await db.organization.findUniqueOrThrow({ where: { id: 'org_7f3k2q9xw1' } });
+      expect(row.aiKey).toMatch(/^v1\./); expect(row.aiKey).not.toContain('xxxx');
+      expect((await http().get('/api/ai/status').set('Cookie', pm)).body.agent).toBe(true);
+      // Another organisation isn't affected.
+      expect((await db.organization.findUniqueOrThrow({ where: { id: 'org_ra4821m1z6' } })).aiKey).toBeNull();
+      // A rejected key isn't saved.
+      ok.mockRejectedValueOnce(new (Anthropic as any).AuthenticationError(401, { error: { message: 'invalid x-api-key' } }, 'invalid x-api-key', new Headers()));
+      expect((await http().put('/api/ai/key').set('Cookie', owner).send({ key: 'sk-ant-api03-' + 'y'.repeat(40) }).expect(400)).body.message).toMatch(/rejected/);
+      expect((await http().get('/api/ai/key').set('Cookie', owner)).body.hint).toBe('WXYZ');
+      await http().delete('/api/ai/key').set('Cookie', owner).expect(200);
+      expect((await http().get('/api/ai/key').set('Cookie', owner)).body.source).toBe('none');
+    } finally { ok.mockRestore(); agent.client = saved; }
   });
 });

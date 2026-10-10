@@ -1,0 +1,11 @@
+# See the emails the app "sent" (when SMTP_URL isn't set) at https://MAIL_DOMAIN, behind a password.
+# To enable: copy this file to mailpit.caddy, point MAIL_DOMAIN's DNS at the server, and in .env set
+#   MAIL_DOMAIN=mail.staging.example.in
+#   MAIL_PASSWORD_HASH=...   # from: docker compose -f docker-compose.yml -f docker-compose.prod.yml run --rm caddy caddy hash-password
+# then: docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d caddy
+{$MAIL_DOMAIN} {
+	basic_auth {
+		{$MAIL_USER} {$MAIL_PASSWORD_HASH}
+	}
+	reverse_proxy mailpit:8025
+}
