@@ -79,7 +79,7 @@ export class TasksController {
     if (b.priority !== undefined && b.priority !== t.priority) { data.priority = oneOf(b.priority, 'Priority', PRIORITIES); log.push('set priority to ' + b.priority); }
     if (b.assigneeId !== undefined && b.assigneeId !== t.assigneeId) {
       AccessService.require(me, 'task.assign');
-      const u = await this.prisma.user.findUnique({ where: { id: String(b.assigneeId) } });
+      const u = await this.prisma.membership.findUnique({ where: { id: String(b.assigneeId) } });
       if (!u || u.status !== 'Active') throw new BadRequestException('Pick an active person');
       data.assignee = { connect: { id: u.id } }; log.push('reassigned to ' + u.name);
       await this.notify.send([u.id], 'icon-list-checks', `${me.name.split(' ')[0]} assigned you ${t.title}`, '/tasks', me.id);
@@ -96,7 +96,7 @@ export class TasksController {
     await this.prisma.taskEvent.create({ data: { taskId: id, userId: me.id, kind: 'comment', text } });
     await this.notify.send([t.assigneeId, t.reporterId], 'icon-message-square', `${me.name.split(' ')[0]} commented on ${t.title}`, '/tasks', me.id);
     // email people who have "Comments and mentions" switched on
-    const to = await this.prisma.user.findMany({ where: { id: { in: [t.assigneeId, t.reporterId].filter(x => x && x !== me.id) as string[] }, status: 'Active' } });
+    const to = await this.prisma.membership.findMany({ where: { id: { in: [t.assigneeId, t.reporterId].filter(x => x && x !== me.id) as string[] }, status: 'Active' } });
     const emails = to.filter(u => prefsOf(u.prefs).mention).map(u => u.email);
     if (emails.length) {
       const body = `${me.name} commented on “${t.title}” (TSK-${t.key}):\n\n${text}\n\nOpen it: ${(process.env.WEB_ORIGIN || 'http://localhost:3000').split(',')[0]}/tasks`;

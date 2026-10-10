@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import * as nodemailer from 'nodemailer';
 import type { Transporter } from 'nodemailer';
 import { PrismaService } from './prisma.service';
+import { orgId } from './tenant';
 
 export interface Mail {
   to: string | string[]; cc?: string[]; subject: string; text: string; html?: string;
@@ -28,8 +29,11 @@ export class MailService {
   async send(m: Mail): Promise<{ ok: boolean; error?: string }> {
     const to = (Array.isArray(m.to) ? m.to : [m.to]).filter(Boolean);
     if (!to.length) return { ok: false, error: 'No recipient email address' };
-    const org = await this.prisma.organization.findUnique({ where: { id: 'org' } });
-    const from = process.env.EMAIL_FROM || `${org?.name || 'Business OS'} <no-reply@${(org?.security as any)?.domains?.split(',')[0]?.trim() || 'localhost'}>`;
+    const org = await this.prisma.organization.findUnique({ where: { id: orgId() } });
+    // Sent from the platform address, under the organisation's own name (spec §6).
+    const env = process.env.EMAIL_FROM || '';
+    const addr = env.match(/<([^>]+)>/)?.[1] || (env.includes('@') ? env.trim() : `no-reply@${(org?.security as any)?.domains?.split(',')[0]?.trim() || 'localhost'}`);
+    const from = { name: org?.name || 'Business OS', address: addr };
     let ok = false; let error: string | undefined;
     if (!this.transport) error = 'Email is not configured (SMTP_URL)';
     else {

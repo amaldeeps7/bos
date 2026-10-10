@@ -7,6 +7,9 @@ import { OrgService } from '../core/org.service';
 import { MailService, htmlOf } from '../core/mail.service';
 import { d, toDate } from '../core/util';
 import { prefsOf } from './team.controller';
+import { ExportService, orgDir } from './export.service';
+import { runAs } from '../core/tenant';
+import { promises as fs } from 'fs';
 
 const DIGEST_AT = 8.5; // 8:30 am, organisation time
 const REMIND_MIN = 10;
@@ -21,7 +24,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
   private log = new Logger('Scheduler');
   private timer?: ReturnType<typeof setInterval>;
   private busy = false;
-  constructor(private prisma: PrismaService, private redis: RedisService, private notify: NotifyService, private orgs: OrgService, private mail: MailService) {}
+  constructor(private prisma: PrismaService, private redis: RedisService, private notify: NotifyService, private orgs: OrgService, private mail: MailService, private exports: ExportService) {}
 
   onModuleInit() {
     if (process.env.SCHEDULER === 'off' || process.env.NODE_ENV === 'test') return;
@@ -33,12 +36,33 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
   async tick(at = new Date()) {
     if (this.busy) return; this.busy = true;
     try {
-      const { org, today } = await this.orgs.ctx();
-      const now = nowHours(org.tz, at);
-      await this.reminders(today, now);
-      if (now >= DIGEST_AT && now < DIGEST_AT + 1) await this.digests(today, org.tz);
+      // Each organisation runs in its own tenant context; one failing doesn't stop the rest (spec §6).
+      const orgs = await this.prisma.organization.findMany({ where: { status: 'active' }, select: { id: true } });
+      for (const o of orgs) {
+        await runAs({ orgId: o.id, scope: { all: true } }, async () => {
+          const { org, today } = await this.orgs.ctx();
+          const now = nowHours(org.tz, at);
+          await this.reminders(today, now);
+          if (now >= DIGEST_AT && now < DIGEST_AT + 1) await this.digests(today, org.tz);
+          await this.exports.expire();
+        }).catch(e => this.log.warn(`${o.id}: ${(e as Error).message}`));
+      }
+      await this.purge();
     } catch (e) { this.log.warn(`tick failed: ${(e as Error).message}`); }
     finally { this.busy = false; }
+  }
+
+  /** Closed organisations are deleted for good 30 days after closing (rows cascade from Organization; files removed). */
+  async purge() {
+    const gone = await this.prisma.organization.findMany({ where: { status: 'closed', closedAt: { lt: new Date(Date.now() - 30 * 86400_000) } } });
+    for (const o of gone) {
+      await this.prisma.$base.$transaction(async tx => {
+        await tx.$executeRaw`SELECT set_config('app.org_id', ${o.id}, true)`;
+        await tx.organization.delete({ where: { id: o.id } });
+      });
+      await fs.rm(orgDir(o.id), { recursive: true, force: true });
+      this.log.log(`purged ${o.slug}`);
+    }
   }
 
   private web() { return (process.env.WEB_ORIGIN || 'http://localhost:3000').split(',')[0]; }
@@ -50,7 +74,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     });
     for (const m of soon) {
       const ids = [...new Set([m.organizerId, ...m.attendees.map(a => a.userId)])];
-      const people = await this.prisma.user.findMany({ where: { id: { in: ids }, status: 'Active' } });
+      const people = await this.prisma.membership.findMany({ where: { id: { in: ids }, status: 'Active' } });
       for (const u of people) {
         if (!prefsOf(u.prefs).remind || !(await this.redis.once(`bos:remind:${m.id}:${m.start}:${u.id}`, 86400))) continue;
         const text = `“${m.title}” starts at ${fmtT(m.start)}${m.link ? ` — join: ${m.link}` : ` · ${m.loc}`}`;
@@ -61,7 +85,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
   }
 
   async digests(today: string, tz: string) {
-    const users = await this.prisma.user.findMany({ where: { status: 'Active' } });
+    const users = await this.prisma.membership.findMany({ where: { status: 'Active' } });
     for (const u of users) {
       if (!prefsOf(u.prefs).digest || (u.leaveUntil && d(u.leaveUntil) >= today)) continue;
       if (!(await this.redis.once(`bos:digest:${today}:${u.id}`, 2 * 86400))) continue;

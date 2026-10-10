@@ -11,7 +11,7 @@ export class PeopleController {
   /** Everyone in the workspace, for pickers and avatars. */
   @Get('people')
   async people() {
-    const users = await this.prisma.user.findMany({ where: { status: { not: 'Invited' } }, include: { role: true }, orderBy: { createdAt: 'asc' } });
+    const users = await this.prisma.membership.findMany({ where: { status: { not: 'Invited' } }, include: { role: true }, orderBy: { createdAt: 'asc' } });
     return users.map(u => ({ id: u.id, name: u.name, title: u.title, role: u.role.name, email: u.email, status: u.status }));
   }
 

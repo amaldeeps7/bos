@@ -7,3 +7,4 @@ coverage
 apps/web/next-env.d.ts
 *.tsbuildinfo
 dump.rdb
+storage/

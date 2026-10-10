@@ -39,13 +39,13 @@ export class TeamController {
 
   @Get('team')
   async team() {
-    const [users, st] = await Promise.all([this.prisma.user.findMany({ where: { status: 'Active' }, orderBy: { createdAt: 'asc' } }), this.statuses()]);
+    const [users, st] = await Promise.all([this.prisma.membership.findMany({ where: { status: 'Active' }, orderBy: { createdAt: 'asc' } }), this.statuses()]);
     return users.map(u => this.card(u, st(u)));
   }
 
   @Get('team/:id')
   async person(@Me() me: AuthUser, @Param('id') id: string) {
-    const u = await this.prisma.user.findFirst({ where: { id, status: { not: 'Invited' } }, include: { manager: true, reports: { where: { status: 'Active' }, orderBy: { createdAt: 'asc' } } } });
+    const u = await this.prisma.membership.findFirst({ where: { id, status: { not: 'Invited' } }, include: { manager: true, reports: { where: { status: 'Active' }, orderBy: { createdAt: 'asc' } } } });
     if (!u) throw new NotFoundException('Person not found');
     const st = await this.statuses();
     let projects: { id: string; name: string; customer: string; open: number }[] = [];
@@ -76,7 +76,7 @@ export class TeamController {
   async update(@Me() me: AuthUser, @Param('id') id: string, @Body() b: any) {
     const manage = AccessService.has(me, 'user.manage');
     if (me.id !== id && !manage) throw new ForbiddenException('You can only change your own profile');
-    const u = await this.prisma.user.findUnique({ where: { id } });
+    const u = await this.prisma.membership.findUnique({ where: { id } });
     if (!u) throw new NotFoundException('Person not found');
     const data: Record<string, any> = {};
     if (b.phone !== undefined) data.phone = str(b.phone, 'Phone', { max: 40 }).trim();
@@ -95,14 +95,14 @@ export class TeamController {
         // walk up from the new manager; reaching this person would make a loop
         for (let cur: string | null = mgr, n = 0; cur; n++) {
           if (cur === id || n > 50) throw new BadRequestException('That would make a reporting loop');
-          const up: { managerId: string | null } | null = await this.prisma.user.findUnique({ where: { id: cur }, select: { managerId: true } });
+          const up: { managerId: string | null } | null = await this.prisma.membership.findUnique({ where: { id: cur }, select: { managerId: true } });
           if (!up) throw new BadRequestException('Manager not found');
           cur = up.managerId;
         }
       }
       data.managerId = mgr;
     }
-    await this.prisma.user.update({ where: { id }, data });
+    await this.prisma.membership.update({ where: { id }, data });
     if (me.id !== id) await this.audit.log(me, `Updated ${u.name}’s profile`, 'icon-user-cog', 'access');
     return { ok: true, message: me.id === id ? 'Profile updated.' : `${u.name.split(' ')[0]}’s profile updated.` };
   }
@@ -110,12 +110,12 @@ export class TeamController {
   /** Your own calendar and notification switches. */
   @Patch('me/prefs')
   async prefs(@Me() me: AuthUser, @Body() b: any) {
-    const u = await this.prisma.user.findUniqueOrThrow({ where: { id: me.id } });
+    const u = await this.prisma.membership.findUniqueOrThrow({ where: { id: me.id } });
     const prefs = prefsOf(u.prefs); let message = 'Preferences saved.';
     for (const k of PREF_KEYS) if (typeof b[k] === 'boolean') prefs[k] = b[k];
     const data: Record<string, any> = { prefs };
     if (typeof b.calendar === 'boolean') { data.calendar = b.calendar; message = b.calendar ? 'Calendar connected. Meeting invites will arrive as calendar events.' : 'Calendar disconnected. Meetings won’t be sent to your calendar.'; }
-    await this.prisma.user.update({ where: { id: me.id }, data });
+    await this.prisma.membership.update({ where: { id: me.id }, data });
     return { ok: true, message, prefs, calendar: data.calendar ?? u.calendar };
   }
 }

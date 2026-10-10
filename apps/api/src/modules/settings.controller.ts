@@ -8,8 +8,15 @@ import { Me, Perm } from '../core/decorators';
 import type { AuthUser } from '../core/auth.types';
 import { num, oneOf, str } from '../core/util';
 import { MailService, fill, htmlOf } from '../core/mail.service';
-import { randomBytes } from 'crypto';
-import * as bcrypt from 'bcryptjs';
+import { orgId, Scope } from '../core/tenant';
+import { MembersService } from '../core/members.service';
+import { planAllows, planOf } from '../core/plans';
+
+/** Stored scope → the Access to select's value: all | le:<id> | bu:<id>. */
+const scopeKey = (s: unknown, owner: boolean) => {
+  const v = (s || {}) as { entityIds?: string[]; unitIds?: string[] };
+  return owner ? 'all' : v.entityIds?.[0] ? `le:${v.entityIds[0]}` : v.unitIds?.[0] ? `bu:${v.unitIds[0]}` : 'all';
+};
 
 const anyAdmin = (me: AuthUser) => {
   if (!['settings.manage', 'role.manage', 'role.read', 'user.read'].some(p => AccessService.has(me, p))) throw new ForbiddenException('You can’t open settings');
@@ -18,13 +25,13 @@ const lastActive = (x: Date | null) => (!x ? '—' : Date.now() - x.getTime() < 
 
 @Controller('settings')
 export class SettingsController {
-  constructor(private prisma: PrismaService, private access: AccessService, private audit: AuditService, private orgs: OrgService, private mail: MailService) {}
+  constructor(private prisma: PrismaService, private access: AccessService, private audit: AuditService, private orgs: OrgService, private mail: MailService, private members: MembersService) {}
 
-  private async org() { return this.prisma.organization.findUniqueOrThrow({ where: { id: 'org' } }); }
+  private async org() { return this.prisma.organization.findUniqueOrThrow({ where: { id: orgId() } }); }
   private async patchJson(field: 'security' | 'policy' | 'taxOpts' | 'reminders' | 'templates' | 'modules', patch: Record<string, unknown>) {
     const org = await this.org();
     const next = { ...(org[field] as Record<string, unknown>), ...patch };
-    await this.prisma.organization.update({ where: { id: 'org' }, data: { [field]: next } });
+    await this.prisma.organization.update({ where: { id: orgId() }, data: { [field]: next } });
     return next;
   }
 
@@ -34,18 +41,21 @@ export class SettingsController {
     const { today } = await this.orgs.ctx();
     const [org, entities, units, users, roles, series, sac, catalog, projects] = await Promise.all([
       this.org(), this.prisma.legalEntity.findMany({ orderBy: { name: 'asc' } }), this.prisma.businessUnit.findMany({ include: { entity: true, head: true } }),
-      this.prisma.user.findMany({ include: { role: true }, orderBy: { createdAt: 'asc' } }), this.prisma.role.findMany({ orderBy: { sort: 'asc' } }),
-      this.prisma.series.findMany(), this.prisma.sac.findMany({ orderBy: { code: 'asc' } }), this.prisma.catalogItem.findMany(), this.prisma.project.findMany(),
+      this.prisma.membership.findMany({ include: { role: true }, orderBy: { createdAt: 'asc' } }), this.prisma.role.findMany({ orderBy: { sort: 'asc' } }),
+      this.prisma.series.findMany(), this.prisma.sac.findMany({ orderBy: { code: 'asc' } }), this.prisma.catalogItem.findMany(), this.prisma.project.findMany({ select: { unitId: true } }),
     ]);
+    const entityOrder = (id: string | null) => (id ? entities.findIndex(e => e.id === id) : -1);
     return {
       org: { name: org.name, slug: org.slug, currency: org.currency, tz: org.tz, country: org.country, fy: org.fyStart, dateFmt: org.dateFmt, createdAt: org.createdAt.toISOString(), status: 'Active' },
       modules: MODULES.map(m => ({ ...m, on: (org.modules as any)[m.id] !== false })),
       security: org.security, policy: org.policy, taxOpts: org.taxOpts, reminders: org.reminders, templates: org.templates,
       entities: entities.map(e => ({ ...e, state: stateOf(e.gstin) || 'Unrecognised code' })),
-      units: units.map(u => ({ id: u.id, name: u.name, code: u.code, entity: u.entity.name, entityId: u.entityId, headId: u.headId, head: u.head?.name || 'Not set', projects: projects.filter(p => p.bu === u.name).length })),
-      users: users.map(u => ({ id: u.id, name: u.name, email: u.email, title: u.title, role: u.role.name, status: u.status, last: u.status === 'Invited' ? '—' : lastActive(u.lastActiveAt) })),
+      units: units.map(u => ({ id: u.id, name: u.name, code: u.code, entity: u.entity.name, entityId: u.entityId, headId: u.headId, head: u.head?.name || 'Not set', projects: projects.filter(p => p.unitId === u.id).length })),
+      users: users.map(u => ({ id: u.id, name: u.name, email: u.email, title: u.title, role: u.role.name, scope: scopeKey(u.scope, u.role.builtIn), status: u.status, last: u.status === 'Invited' ? '—' : lastActive(u.lastActiveAt) })),
       roles: roles.map(r => ({ id: r.id, name: r.name, desc: r.desc, builtIn: r.builtIn, perms: r.builtIn ? ALL_PERMS : r.perms })),
-      series: ['INVOICE', 'QUOTATION', 'CREDIT_NOTE', 'RECEIPT', 'PROJECT'].map(t => series.find(s => s.type === t)!).filter(Boolean).map(s => ({ ...s, sample: formatNumber(s, today, org.fyStart) })),
+      // One row per type and issuing entity, in the design's order.
+      series: ['INVOICE', 'QUOTATION', 'CREDIT_NOTE', 'RECEIPT', 'PROJECT'].flatMap(t => series.filter(s => s.type === t).sort((a, b) => entityOrder(a.entityId) - entityOrder(b.entityId)))
+        .map(s => { const e = entities.find(x => x.id === s.entityId); return { ...s, entity: e ? `${e.name} · GSTIN ${e.gstin.slice(0, 2)}` : 'All entities', sample: formatNumber(s, today, org.fyStart) }; }),
       sac: sac.map(x => ({ ...x, used: catalog.filter(c => c.sac === x.code).length })),
     };
   }
@@ -60,7 +70,7 @@ export class SettingsController {
     if (b.country !== undefined) { data.country = str(b.country, 'Country', { max: 2 }).toUpperCase(); if (!/^[A-Z]{2}$/.test(data.country)) throw new BadRequestException('Use a two-letter country code'); }
     if (b.fy !== undefined) data.fyStart = oneOf(b.fy, 'Financial year', ['April', 'January']);
     if (b.dateFmt !== undefined) data.dateFmt = oneOf(b.dateFmt, 'Date format', ['8 Oct 2026', '08/10/2026', '2026-10-08']);
-    await this.prisma.organization.update({ where: { id: 'org' }, data });
+    await this.prisma.organization.update({ where: { id: orgId() }, data });
     await this.audit.log(me, 'Updated organisation details');
     return { message: 'Organisation saved. New records use these defaults.' };
   }
@@ -77,10 +87,25 @@ export class SettingsController {
     return { message: `${e.name} saved. Issued documents keep the details they were issued with.` };
   }
 
+  /** Another GSTIN = another entity, with its own invoice, credit note and receipt series. Limited by plan. */
+  @Post('entities') @Perm('settings.manage')
+  async addEntity(@Me() me: AuthUser, @Body() b: any) {
+    const org = await this.org(); const p = planOf(org.plan);
+    const count = await this.prisma.legalEntity.count();
+    if (p.entities && count >= p.entities) throw new ForbiddenException(`The ${p.name} plan includes ${p.entities} legal ${p.entities === 1 ? 'entity' : 'entities'}. Upgrade in Settings → Plan & billing.`);
+    const name = str(b.name, 'Registered name', { max: 200 }).trim(); if (!name) throw new BadRequestException('Enter the registered name.');
+    const gstin = str(b.gstin, 'GSTIN', { max: 15 }).trim().toUpperCase(); if (!isValidGstin(gstin)) throw new BadRequestException('Enter a valid 15-character GSTIN.');
+    if (await this.prisma.legalEntity.findFirst({ where: { gstin } })) throw new BadRequestException('An entity with this GSTIN already exists.');
+    const e = await this.prisma.legalEntity.create({ data: { name, gstin, pan: gstin.slice(2, 12), cin: str(b.cin, 'CIN', { max: 30 }).trim(), address: str(b.address, 'Address', { max: 500 }).trim(),
+      bank: str(b.bank, 'Bank', { max: 300 }).trim(), upi: str(b.upi, 'UPI', { max: 100 }).trim(), isDefault: count === 0 } });
+    await this.audit.log(me, `Added legal entity ${name} (${gstin})`, 'icon-landmark');
+    return { id: e.id, message: `${name} added. Its invoice, credit note and receipt numbers start at 1.` };
+  }
+
   @Post('entities/:id/default') @HttpCode(200) @Perm('settings.manage')
   async makeDefault(@Me() me: AuthUser, @Param('id') id: string) {
     const e = await this.prisma.legalEntity.findUniqueOrThrow({ where: { id } });
-    await this.prisma.$transaction([this.prisma.legalEntity.updateMany({ data: { isDefault: false } }), this.prisma.legalEntity.update({ where: { id }, data: { isDefault: true } })]);
+    await this.prisma.$transaction(async tx => { await tx.legalEntity.updateMany({ data: { isDefault: false } }); await tx.legalEntity.update({ where: { id }, data: { isDefault: true } }); });
     await this.audit.log(me, `Made ${e.name} the default issuing entity`, 'icon-landmark');
     return { message: `${e.name} now issues new documents.` };
   }
@@ -88,8 +113,8 @@ export class SettingsController {
   @Post('units') @Perm('settings.manage')
   async unit(@Me() me: AuthUser, @Body() b: any) {
     const name = str(b.name, 'Name', { max: 80 }).trim(); if (!name) throw new BadRequestException('Name the unit first.');
-    if (await this.prisma.businessUnit.findUnique({ where: { name } })) throw new BadRequestException('A unit with that name exists');
-    const e = (await this.prisma.legalEntity.findFirst({ where: { isDefault: true } })) || (await this.prisma.legalEntity.findFirstOrThrow());
+    if (await this.prisma.businessUnit.findFirst({ where: { name } })) throw new BadRequestException('A unit with that name exists');
+    const e = (b.entityId && await this.prisma.legalEntity.findUnique({ where: { id: String(b.entityId) } })) || (await this.prisma.legalEntity.findFirst({ where: { isDefault: true } })) || (await this.prisma.legalEntity.findFirstOrThrow());
     await this.prisma.businessUnit.create({ data: { name, code: (str(b.code, 'Code', { max: 4 }).toUpperCase() || name.slice(0, 2).toUpperCase()), entityId: e.id } });
     await this.audit.log(me, `Added business unit ${name}`, 'icon-network');
     return { message: `${name} added. Its numbering starts with the first document it issues.` };
@@ -102,10 +127,7 @@ export class SettingsController {
     if (b.code !== undefined) data.code = str(b.code, 'Code', { max: 4 }).toUpperCase();
     if (b.headId !== undefined) data.headId = b.headId || null;
     if (b.entityId !== undefined) data.entityId = String(b.entityId);
-    await this.prisma.$transaction(async tx => {
-      await tx.businessUnit.update({ where: { id }, data });
-      if (data.name && data.name !== u.name) await tx.project.updateMany({ where: { bu: u.name }, data: { bu: data.name } });
-    });
+    await this.prisma.businessUnit.update({ where: { id }, data });
     await this.audit.log(me, `Updated business unit ${data.name || u.name}`, 'icon-network');
     return { message: `${data.name || u.name} saved.` };
   }
@@ -113,7 +135,7 @@ export class SettingsController {
   @Delete('units/:id') @Perm('settings.manage')
   async deleteUnit(@Me() me: AuthUser, @Param('id') id: string) {
     const u = await this.prisma.businessUnit.findUniqueOrThrow({ where: { id } });
-    if (await this.prisma.project.count({ where: { bu: u.name } })) throw new BadRequestException('Move its projects to another unit first.');
+    if (await this.prisma.project.count({ where: { unitId: u.id } })) throw new BadRequestException('Move its projects to another unit first.');
     await this.prisma.businessUnit.delete({ where: { id } });
     await this.audit.log(me, `Removed business unit ${u.name}`, 'icon-trash-2');
     return { message: `${u.name} removed.` };
@@ -123,6 +145,7 @@ export class SettingsController {
   @Patch('modules/:id') @Perm('settings.manage')
   async module(@Me() me: AuthUser, @Param('id') id: string, @Body() b: any) {
     const m = MODULES.find(x => x.id === id); if (!m) throw new NotFoundException();
+    if (b.on) { const org = await this.org(); if (!planAllows(org.plan, id)) throw new ForbiddenException(`${m.name} isn’t in the ${planOf(org.plan).name} plan. Upgrade in Settings → Plan & billing.`); }
     await this.patchJson('modules', { [id]: !!b.on });
     await this.access.invalidateModules();
     await this.audit.log(me, `${b.on ? 'Switched on' : 'Switched off'} the ${m.name} module`, 'icon-blocks');
@@ -132,22 +155,29 @@ export class SettingsController {
   // users
   @Patch('users/:id') @Perm('user.manage')
   async userUpdate(@Me() me: AuthUser, @Param('id') id: string, @Body() b: any) {
-    const before = await this.prisma.user.findUniqueOrThrow({ where: { id } });
+    const before = await this.prisma.membership.findUniqueOrThrow({ where: { id } });
     const data: any = {}; const msgs: string[] = [];
     if (b.role !== undefined) {
-      const role = await this.prisma.role.findUnique({ where: { name: str(b.role, 'Role', { required: true }) } }); if (!role) throw new BadRequestException('Unknown role');
+      const role = await this.prisma.role.findFirst({ where: { name: str(b.role, 'Role', { required: true }) } }); if (!role) throw new BadRequestException('Unknown role');
       if (id === me.id && role.id !== me.roleId) throw new BadRequestException('You can’t change your own role');
       if (role.id !== before.roleId) { data.roleId = role.id; msgs.push(`${before.name.split(' ')[0]} is now ${role.name}.`); await this.audit.log(me, `Changed ${before.name} to ${role.name}`, 'icon-user-cog', 'access'); }
     }
     if (b.name !== undefined) { data.name = str(b.name, 'Name', { max: 120 }).trim(); if (!data.name) throw new BadRequestException('Enter a name.'); }
     if (b.title !== undefined) data.title = str(b.title, 'Job title', { max: 120 }).trim();
+    if (b.scope !== undefined) {
+      const role = await this.prisma.role.findUniqueOrThrow({ where: { id: data.roleId || before.roleId } });
+      if (role.builtIn) throw new BadRequestException('The Owner always sees every entity and unit.');
+      data.scope = await this.scopeOf(String(b.scope));
+      const label = await this.scopeLabel(String(b.scope));
+      msgs.push(b.scope === 'all' ? `${before.name.split(' ')[0]} sees records from every entity.` : `${before.name.split(' ')[0]} now sees only ${label} records.`);
+      await this.audit.log(me, b.scope === 'all' ? `Gave ${before.name} access to every entity` : `Limited ${before.name} to ${label}`, 'icon-user-cog', 'access');
+    }
     if (b.password) {
-      const org = await this.org(); const min = Number((org.security as any).pwd) || 12;
-      if (String(b.password).length < min) throw new BadRequestException(`The password must be at least ${min} characters.`);
-      data.passwordHash = await bcrypt.hash(String(b.password), 10); msgs.push('Password reset.');
+      await this.members.resetPassword(id, String(b.password)); msgs.push('Password reset.');
       await this.audit.log(me, `Reset the password for ${before.name}`, 'icon-key-round', 'access');
     }
-    await this.prisma.user.update({ where: { id }, data });
+    await this.prisma.membership.update({ where: { id }, data });
+    if (data.name) await this.syncAccountName(before.accountId, data.name);
     if (data.name || data.title !== undefined) await this.audit.log(me, `Updated ${data.name || before.name}'s details`, 'icon-user-cog', 'access');
     return { message: msgs.join(' ') || `${data.name || before.name} saved.` };
   }
@@ -155,60 +185,61 @@ export class SettingsController {
   @Post('users/:id/toggle') @HttpCode(200) @Perm('user.read')
   async userToggle(@Me() me: AuthUser, @Param('id') id: string) {
     if (id === me.id) throw new BadRequestException('You can’t deactivate yourself');
-    const u = await this.prisma.user.findUniqueOrThrow({ where: { id } });
+    const u = await this.prisma.membership.findUniqueOrThrow({ where: { id } });
     if (u.status === 'Invited') {
-      AccessService.require(me, 'user.invite'); const r = await this.sendInvite(u.id, me);
+      AccessService.require(me, 'user.invite'); const r = await this.members.sendInvite(u.id, me);
       await this.audit.log(me, `Resent the invitation to ${u.email}`, 'icon-user-plus', 'access');
       return { message: r.ok ? `Invitation resent to ${u.email}.` : `Invitation not sent: ${r.error}` };
     }
     AccessService.require(me, 'user.manage');
     const status = u.status === 'Active' ? 'Deactivated' : 'Active';
-    await this.prisma.user.update({ where: { id }, data: { status } });
+    await this.prisma.membership.update({ where: { id }, data: { status } });
     await this.audit.log(me, `${status === 'Active' ? 'Reactivated' : 'Deactivated'} ${u.name}`, 'icon-user-x', 'access');
     return { message: status === 'Active' ? `${u.name} can sign in again.` : `${u.name} is signed out everywhere. Their records stay.` };
   }
 
   private webOrigin() { return (process.env.WEB_ORIGIN || 'http://localhost:3000').split(',')[0].replace(/\/$/, ''); }
-  private async checkEmail(email: string) {
-    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw new BadRequestException('Enter a valid email address.');
-    const org = await this.org();
-    const doms = String((org.security as any).domains || '').split(',').map(x => x.trim().toLowerCase()).filter(Boolean);
-    if (doms.length && !doms.includes(email.split('@')[1])) throw new BadRequestException(`Only ${doms.join(', ')} addresses can join (Settings → Security).`);
-    if (await this.prisma.user.findUnique({ where: { email } })) throw new BadRequestException('That person is already in this workspace.');
-    return org;
+
+  /** "all" | "le:<entityId>" | "bu:<unitId>" → stored scope. */
+  private async scopeOf(v: string): Promise<Scope> {
+    if (v === 'all') return { all: true };
+    const [k, id] = v.split(':');
+    if (k === 'le' && await this.prisma.legalEntity.findUnique({ where: { id } })) return { entityIds: [id] };
+    if (k === 'bu' && await this.prisma.businessUnit.findUnique({ where: { id } })) return { unitIds: [id] };
+    throw new BadRequestException('Unknown entity or unit');
   }
-  /** Emails a link to set a password and join. Valid for 7 days. */
-  private async sendInvite(userId: string, by: AuthUser) {
-    const token = randomBytes(24).toString('hex');
-    const u = await this.prisma.user.update({ where: { id: userId }, data: { inviteToken: token, inviteExpiry: new Date(Date.now() + 7 * 86400_000) }, include: { role: true } });
-    const org = await this.org(); const link = `${this.webOrigin()}/accept-invite?token=${token}`;
-    const text = `Hi,\n\n${by.name} has invited you to join ${org.name} on Business OS as ${u.role.name}.\n\nSet your password and sign in here (the link works for 7 days):\n${link}\n\nIf you weren't expecting this, you can ignore this email.`;
-    return this.mail.send({ to: u.email, subject: `${by.name} invited you to ${org.name}`, text, html: htmlOf(text), replyTo: by.email, kind: 'invite', ref: u.email, userId: by.id });
+  private async scopeLabel(v: string) {
+    const [k, id] = v.split(':');
+    if (k === 'le') return (await this.prisma.legalEntity.findUnique({ where: { id } }))?.name || 'that entity';
+    if (k === 'bu') return `${(await this.prisma.businessUnit.findUnique({ where: { id } }))?.name || 'that'} unit`;
+    return 'every entity';
+  }
+  /** Names live on the Account; this organisation's copy follows. Other organisations update on next sign-in. */
+  private async syncAccountName(accountId: string, name: string) {
+    const [{ n }] = await this.prisma.$queryRaw<{ n: number }[]>`SELECT account_org_count(${accountId}) AS n`;
+    if (n <= 1) await this.prisma.account.update({ where: { id: accountId }, data: { name } });
   }
 
   @Post('users/invite') @Perm('user.invite')
   async invite(@Me() me: AuthUser, @Body() b: any) {
     const email = str(b.email, 'Email', { max: 200 }).trim().toLowerCase();
-    await this.checkEmail(email);
-    const role = await this.prisma.role.findUnique({ where: { name: str(b.role, 'Role', { required: true }) } }); if (!role) throw new BadRequestException('Unknown role');
-    const local = email.split('@')[0];
-    const u = await this.prisma.user.create({ data: { email, name: str(b.name, 'Name', { max: 120 }).trim() || local.charAt(0).toUpperCase() + local.slice(1), roleId: role.id, status: 'Invited' } });
-    const r = await this.sendInvite(u.id, me);
-    await this.audit.log(me, `Invited ${email} as ${role.name}`, 'icon-user-plus', 'access');
+    const role = await this.prisma.role.findFirst({ where: { name: str(b.role, 'Role', { required: true }) } }); if (!role) throw new BadRequestException('Unknown role');
+    if (role.builtIn) throw new BadRequestException('There is one Owner. Invite them with another role.');
+    const r = await this.members.invite(email, role.id, me, str(b.name, 'Name', { max: 120 }).trim());
+    await this.audit.log(me, `${r.joined ? 'Added' : 'Invited'} ${email} as ${role.name}`, 'icon-user-plus', 'access');
+    if (r.joined) return { message: `${email} already uses Business OS, so they’ve been added. This organisation is now in their organisation menu.` };
     return { message: r.ok ? `Invitation emailed to ${email}.` : `${email} added as invited, but the email wasn’t sent: ${r.error}` };
   }
-
   /** Adds someone directly with a password the admin sets; they can sign in straight away. */
   @Post('users') @Perm('user.manage')
   async addUser(@Me() me: AuthUser, @Body() b: any) {
     const email = str(b.email, 'Email', { max: 200 }).trim().toLowerCase();
     const name = str(b.name, 'Name', { max: 120 }).trim(); if (!name) throw new BadRequestException('Enter their name.');
-    const org = await this.checkEmail(email);
-    const role = await this.prisma.role.findUnique({ where: { name: str(b.role, 'Role', { required: true }) } }); if (!role) throw new BadRequestException('Unknown role');
-    const min = Number((org.security as any).pwd) || 12; const password = String(b.password || '');
-    if (password.length < min) throw new BadRequestException(`The password must be at least ${min} characters (Settings → Security).`);
-    await this.prisma.user.create({ data: { email, name, title: str(b.title, 'Job title', { max: 120 }).trim(), roleId: role.id, status: 'Active', passwordHash: await bcrypt.hash(password, 10) } });
+    const role = await this.prisma.role.findFirst({ where: { name: str(b.role, 'Role', { required: true }) } }); if (!role) throw new BadRequestException('Unknown role');
+    if (role.builtIn) throw new BadRequestException('There is one Owner. Add them with another role.');
+    const { existing, org } = await this.members.add({ email, name, title: str(b.title, 'Job title', { max: 120 }).trim(), roleId: role.id, password: String(b.password || '') });
     await this.audit.log(me, `Added ${name} (${email}) as ${role.name}`, 'icon-user-plus', 'access');
+    if (existing) return { message: `${name} already uses Business OS, so they sign in with their own password. ${org.name} is now in their organisation menu.` };
     let note = '';
     if (b.welcome) {
       const text = `Hi ${name.split(' ')[0]},\n\n${me.name} has set up your ${org.name} account on Business OS as ${role.name}.\n\nSign in at ${this.webOrigin()}/login with ${email}. ${me.name.split(' ')[0]} will give you your first password.`;
@@ -223,7 +254,7 @@ export class SettingsController {
   async createRole(@Me() me: AuthUser, @Body() b: any) {
     const name = str(b.name, 'Role name', { max: 60 }).trim(); if (!name) throw new BadRequestException('Name the role.');
     if (await this.prisma.role.findFirst({ where: { name: { equals: name, mode: 'insensitive' } } })) throw new BadRequestException('A role with that name already exists.');
-    const from = await this.prisma.role.findUnique({ where: { name: str(b.from, 'Start from', { required: true }) } }); if (!from) throw new BadRequestException('Unknown role');
+    const from = await this.prisma.role.findFirst({ where: { name: str(b.from, 'Start from', { required: true }) } }); if (!from) throw new BadRequestException('Unknown role');
     await this.prisma.role.create({ data: { name, desc: `Custom role, started from ${from.name}.`, perms: from.builtIn ? ALL_PERMS : from.perms, sort: 100 } });
     await this.audit.log(me, `Created role ${name} from ${from.name}`, 'icon-key-round', 'access');
     return { message: `${name} created. Adjust its permissions below.` };
@@ -282,7 +313,7 @@ export class SettingsController {
   async tax(@Me() me: AuthUser, @Body() b: any) {
     if (b.sac) {
       const rate = Number(oneOf(String(b.rate), 'Rate', ['0', '5', '12', '18', '28']));
-      await this.prisma.sac.update({ where: { code: String(b.sac) }, data: { rate } });
+      await this.prisma.sac.update({ where: { orgId_code: { orgId: orgId(), code: String(b.sac) } }, data: { rate } });
       await this.audit.log(me, `Set GST on SAC ${b.sac} to ${rate}%`, 'icon-percent');
       return { message: `SAC ${b.sac} now charges ${rate}% GST on new lines.` };
     }
@@ -332,13 +363,13 @@ export class SettingsController {
     return { message: `${kind === 'invoice' ? 'Invoice' : 'Quotation'} template saved. PDFs generated from now on use it.` };
   }
 
-  @Patch('series/:type') @Perm('numbering.manage')
-  async series(@Me() me: AuthUser, @Param('type') type: string, @Body() b: any) {
-    const s = await this.prisma.series.findUniqueOrThrow({ where: { type } });
+  @Patch('series/:id') @Perm('numbering.manage')
+  async series(@Me() me: AuthUser, @Param('id') id: string, @Body() b: any) {
+    const s = await this.prisma.series.findUniqueOrThrow({ where: { id } });
     const pattern = str(b.pattern, 'Pattern', { max: 60 }); const next = Math.round(num(b.next, 'Next number', { min: 1 }));
     if (!pattern.includes('{seq}')) throw new BadRequestException('The pattern must include {seq}.');
     if (next < s.next) throw new BadRequestException(`Forward only. Numbers below ${s.next} are already on documents.`);
-    const upd = await this.prisma.series.update({ where: { type }, data: { prefix: str(b.prefix, 'Prefix', { max: 10 }).toUpperCase(), pattern, padding: Math.round(num(b.padding, 'Digits', { min: 0, max: 8 })), next } });
+    const upd = await this.prisma.series.update({ where: { id }, data: { prefix: str(b.prefix, 'Prefix', { max: 10 }).toUpperCase(), pattern, padding: Math.round(num(b.padding, 'Digits', { min: 0, max: 8 })), next } });
     const { today, org } = await this.orgs.ctx();
     await this.audit.log(me, `Changed ${s.label.toLowerCase()} numbering to ${pattern}`, 'icon-hash');
     return { message: `Saved. The next one will be ${formatNumber(upd, today, org.fyStart)}.` };

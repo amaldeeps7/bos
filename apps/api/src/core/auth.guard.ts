@@ -1,10 +1,23 @@
-import { CanActivate, ExecutionContext, ForbiddenException, Injectable, UnauthorizedException } from '@nestjs/common';
+import { CanActivate, ExecutionContext, ForbiddenException, Injectable, NestMiddleware, UnauthorizedException } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { JwtService } from '@nestjs/jwt';
+import type { NextFunction, Request, Response } from 'express';
 import { AccessService } from './access.service';
 import { IS_PUBLIC, PERMS } from './decorators';
+import type { TokenPayload } from './auth.types';
+import { tenant, tenantStore } from './tenant';
 
 export const COOKIE = 'bos_token';
+
+/** Opens an empty tenant context for every request; AuthGuard fills it once the token is verified. */
+export class TenantMiddleware implements NestMiddleware {
+  use(_req: Request, _res: Response, next: NextFunction) { tenantStore.run({}, next); }
+}
+
+export const tokenOf = (req: any): string => {
+  const header = String(req.headers?.authorization || '');
+  return req.cookies?.[COOKIE] || (header.startsWith('Bearer ') ? header.slice(7) : '');
+};
 
 @Injectable()
 export class AuthGuard implements CanActivate {
@@ -12,18 +25,27 @@ export class AuthGuard implements CanActivate {
 
   async canActivate(ctx: ExecutionContext): Promise<boolean> {
     const targets = [ctx.getHandler(), ctx.getClass()];
-    if (this.reflector.getAllAndOverride<boolean>(IS_PUBLIC, targets)) return true;
     const req = ctx.switchToHttp().getRequest();
-    const header = String(req.headers.authorization || '');
-    const token = req.cookies?.[COOKIE] || (header.startsWith('Bearer ') ? header.slice(7) : '');
-    if (!token) throw new UnauthorizedException('Sign in to continue');
-    let sub: string;
-    try { sub = (await this.jwt.verifyAsync<{ sub: string }>(token)).sub; } catch { throw new UnauthorizedException('Your session has ended. Sign in again.'); }
-    const user = await this.access.load(sub);
-    if (!user) throw new UnauthorizedException('This account is not active');
+    const isPublic = this.reflector.getAllAndOverride<boolean>(IS_PUBLIC, targets);
+    const token = tokenOf(req);
+    if (!token) { if (isPublic) return true; throw new UnauthorizedException('Sign in to continue'); }
+    let p: TokenPayload;
+    try { p = await this.jwt.verifyAsync<TokenPayload>(token); } catch { if (isPublic) return true; throw new UnauthorizedException('Your session has ended. Sign in again.'); }
+    if (!p.org || !p.mid) { if (isPublic) return true; throw new UnauthorizedException('Your session has ended. Sign in again.'); }
+    // The tenant comes from the token, which only /auth/login, /auth/switch and /signup issue after checking membership.
+    const c = tenant();
+    if (!c) throw new Error('TenantMiddleware is not installed');
+    Object.assign(c, { orgId: p.org, accountId: p.sub, membershipId: p.mid });
+    const user = await this.access.load(p.mid, p.sub);
+    if (!user) {
+      Object.assign(c, { orgId: undefined, membershipId: undefined });
+      if (isPublic) return true;
+      throw new UnauthorizedException('You no longer have access to this organisation');
+    }
+    c.scope = user.scope;
     req.user = user;
     const need = this.reflector.getAllAndOverride<string[]>(PERMS, targets) || [];
-    for (const p of need) if (!AccessService.has(user, p)) throw new ForbiddenException(`You don't have permission: ${p}`);
+    for (const perm of need) if (!AccessService.has(user, perm)) throw new ForbiddenException(`You don't have permission: ${perm}`);
     return true;
   }
 }

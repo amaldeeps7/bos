@@ -1,10 +1,17 @@
-/* Seeds the demo workspace from the design prototype ("Demo Consulting").
-   Dates are relative to today in the organisation's time zone, so the demo always looks current. */
+/* Seeds two organisations from the design prototype: "Demo Consulting" (the sample workspace, two legal
+   entities) and "Raman Advisory" (a fresh trial Priya owns, on the Get started checklist).
+   Dates are relative to today in the organisation's time zone, so the demo always looks current.
+   Runs as the database owner (BYPASSRLS) on one connection, setting app.org_id for each organisation. */
 import { PrismaClient } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
 import { DEFAULT_ROLES, MODULES, todayISO, addDays, stateOf } from '@bos/shared';
+import { DEFAULT_SAC, orgDefaults } from '../src/core/plans';
 
-const prisma = new PrismaClient();
+const url = process.env.MIGRATE_DATABASE_URL || process.env.DATABASE_URL || '';
+const prisma = new PrismaClient({ datasourceUrl: url + (url.includes('?') ? '&' : '?') + 'connection_limit=1' });
+/** Every following insert belongs to this organisation (column default + RLS check). */
+const tenant = (id: string) => prisma.$executeRaw`SELECT set_config('app.org_id', ${id}, false)`;
+export const DEMO_ORG = 'org_7f3k2q9xw1';
 const TZ = 'Asia/Kolkata';
 const T = todayISO(TZ);
 const D = (o: number) => new Date(addDays(T, o) + 'T00:00:00.000Z');
@@ -16,15 +23,13 @@ async function main() {
     console.log('Workspace already exists — skipping the demo seed.');
     return;
   }
-  // wipe (order matters for FKs)
-  for (const m of ['emailLog', 'notification', 'auditLog', 'approval', 'opportunity', 'asset', 'creditNote', 'paymentAllocation', 'payment', 'invoice', 'quote',
-    'actionItem', 'meetingAttendee', 'meeting', 'timeBlock', 'taskEvent', 'task', 'milestone', 'project', 'customer', 'businessUnit', 'user', 'role',
-    'legalEntity', 'catalogItem', 'sac', 'series', 'legacyMonth', 'organization'] as const) {
-    await (prisma as any)[m].deleteMany();
-  }
+  // wipe: every tenant row cascades from its organisation
+  await prisma.$executeRaw`DELETE FROM "Organization"`;
+  await prisma.$executeRaw`DELETE FROM "Account"`;
 
   await prisma.organization.create({ data: {
-    id: 'org', slug: 'demo-consulting', name: 'Demo Consulting', createdAt: new Date('2019-03-14T05:30:00Z'),
+    id: DEMO_ORG, slug: 'democonsulting', name: 'Demo Consulting', createdAt: new Date('2019-01-14T05:30:00Z'),
+    plan: 'growth', demo: true, setupDone: true, billingEmail: 'accounts@democonsulting.in',
     modules: Object.fromEntries(MODULES.map(m => [m.id, true])),
     security: { mfaAll: false, mfaFin: true, ssoGoogle: true, newDevice: true, timeout: '8 hours', pwd: '12', domains: 'democonsulting.in' },
     policy: { discount: '10', quoteMax: '2500000', assetMax: '50000', invAll: true, noSelf: true, msDates: true },
@@ -38,11 +43,12 @@ async function main() {
     },
   } });
 
+  await tenant(DEMO_ORG);
   const roles: Record<string, string> = {};
   for (const [i, r] of DEFAULT_ROLES.entries()) roles[r.name] = (await prisma.role.create({ data: { name: r.name, desc: r.desc, builtIn: !!r.builtIn, perms: r.perms, sort: i } })).id;
 
   const hash = await bcrypt.hash('demo1234', 10);
-  const U: Record<string, string> = {};
+  const U: Record<string, string> = {}; const A: Record<string, string> = {};
   const people: [string, string, string, string, string, string][] = [
     ['anand', 'Anand Iyer', 'Founder & CEO', 'Owner', 'Active', 'today'], ['priya', 'Priya Raman', 'Head of Delivery', 'Project manager', 'Active', 'now'],
     ['meera', 'Meera Nair', 'Finance manager', 'Finance', 'Active', '2h'], ['rohan', 'Rohan Das', 'Sales lead', 'Sales', 'Active', '1d'],
@@ -59,23 +65,33 @@ async function main() {
   const last: Record<string, Date | null> = { now: new Date(), today: ago(0, 9), '2h': new Date(Date.now() - 2 * 3600e3), '1d': ago(1, 17), '3d': ago(3, 12), '': null };
   for (const [k, name, title, role, status, la] of people) {
     const [dept, , phone, joined] = org[k];
-    U[k] = (await prisma.user.create({ data: { email: `${k}@democonsulting.in`, name, title, roleId: roles[role], status, passwordHash: status === 'Active' ? hash : null, lastActiveAt: last[la],
-      dept, phone, location: 'Mumbai', joinedAt: joined ? new Date(joined + 'T00:00:00Z') : null, leaveUntil: k === 'meera' ? D(2) : null } })).id;
+    const email = `${k}@democonsulting.in`;
+    const acc = await prisma.account.create({ data: { email, name, passwordHash: status === 'Active' ? hash : null } });
+    A[k] = acc.id;
+    U[k] = (await prisma.membership.create({ data: { accountId: acc.id, email, name, title, roleId: roles[role], status, lastActiveAt: last[la],
+      dept, phone, location: 'Mumbai', joinedAt: joined ? new Date(joined + 'T00:00:00Z') : null, leaveUntil: k === 'meera' ? D(2) : null,
+      inviteToken: status === 'Invited' ? `${DEMO_ORG}.seed-${k}` : null, inviteExpiry: status === 'Invited' ? new Date(Date.now() + 7 * 86400e3) : null } })).id;
   }
-  for (const [k, [, mgr]] of Object.entries(org)) if (mgr) await prisma.user.update({ where: { id: U[k] }, data: { managerId: U[mgr] } });
+  for (const [k, [, mgr]] of Object.entries(org)) if (mgr) await prisma.membership.update({ where: { id: U[k] }, data: { managerId: U[mgr] } });
 
   const le1 = await prisma.legalEntity.create({ data: { name: 'Demo Consulting Pvt Ltd', gstin: '29AABCD4417E1Z3', pan: 'AABCD4417E', cin: 'U72900KA2019PTC124518', address: '2nd floor, 100 Feet Road, Indiranagar, Bengaluru 560038', bank: 'HDFC Bank · A/c 50200012345678 · IFSC HDFC0000123', upi: 'democonsulting@hdfcbank', isDefault: true } });
-  await prisma.legalEntity.create({ data: { name: 'Demo Consulting Services LLP', gstin: '27AAJFD2210K1ZP', pan: 'AAJFD2210K', cin: 'AAT-4471', address: 'Unit 504, Kamala Mills, Lower Parel, Mumbai 400013', bank: 'ICICI Bank · A/c 039905001122 · IFSC ICIC0000399', upi: 'dcsllp@icici', isDefault: false } });
-  await prisma.businessUnit.createMany({ data: [{ name: 'Software', code: 'SW', entityId: le1.id, headId: U.priya }, { name: 'Cybersecurity', code: 'CY', entityId: le1.id, headId: U.sara }] });
+  const le2 = await prisma.legalEntity.create({ data: { name: 'Demo Consulting Services LLP', gstin: '27AAJFD2210K1ZP', pan: 'AAJFD2210K', cin: 'AAT-4471', address: 'Unit 504, Kamala Mills, Lower Parel, Mumbai 400013', bank: 'ICICI Bank · A/c 039905001122 · IFSC ICIC0000399', upi: 'dcsllp@icici', isDefault: false } });
+  const BU: Record<string, string> = {};
+  for (const [name, code, head] of [['Software', 'SW', 'priya'], ['Cybersecurity', 'CY', 'sara']]) BU[name] = (await prisma.businessUnit.create({ data: { name, code, entityId: le1.id, headId: U[head] } })).id;
 
   await prisma.sac.createMany({ data: [{ code: '998313', desc: 'IT consulting and support', rate: 18 }, { code: '998314', desc: 'IT design and development', rate: 18 }, { code: '998316', desc: 'IT infrastructure and network management', rate: 18 }, { code: '998319', desc: 'Other IT services, including security testing', rate: 18 }] });
   const catalog = [ln('Senior engineer', 1, 'day', 28000), ln('Product designer', 1, 'day', 22000), ln('Penetration tester', 1, 'day', 45000, 0, '998319'), ln('Compliance consultant', 1, 'day', 35000, 0, '998313'), ln('Retest round', 1, 'fixed', 120000, 0, '998319'), ln('Application support retainer', 1, 'month', 60000, 0, '998316'), ln('Delivery management', 1, 'fixed', 100000)];
   await prisma.catalogItem.createMany({ data: catalog.map((c, i) => ({ d: c.d, sac: c.sac, unit: c.unit, rate: c.rate, sort: i })) });
+  // One series per document type and GSTIN; quotations and projects are organisation-wide.
+  const yr = { pattern: '{prefix}-{yyyy}-{seq}', padding: 4, reset: 'every financial year' };
   await prisma.series.createMany({ data: [
-    { type: 'INVOICE', label: 'Invoices', prefix: 'INV', pattern: '{prefix}-{yyyy}-{seq}', padding: 4, next: 143, reset: 'every financial year' },
-    { type: 'QUOTATION', label: 'Quotations', prefix: 'QT', pattern: '{prefix}-{yyyy}-{seq}', padding: 4, next: 91, reset: 'every financial year' },
-    { type: 'CREDIT_NOTE', label: 'Credit notes', prefix: 'CN', pattern: '{prefix}-{yyyy}-{seq}', padding: 4, next: 9, reset: 'every financial year' },
-    { type: 'RECEIPT', label: 'Receipts', prefix: 'RCP', pattern: '{prefix}-{yyyy}-{seq}', padding: 4, next: 65, reset: 'every financial year' },
+    { type: 'INVOICE', entityId: le1.id, label: 'Invoices', prefix: 'INV', next: 143, ...yr },
+    { type: 'INVOICE', entityId: le2.id, label: 'Invoices', prefix: 'MH-INV', next: 18, ...yr },
+    { type: 'QUOTATION', label: 'Quotations', prefix: 'QT', next: 91, ...yr },
+    { type: 'CREDIT_NOTE', entityId: le1.id, label: 'Credit notes', prefix: 'CN', next: 9, ...yr },
+    { type: 'CREDIT_NOTE', entityId: le2.id, label: 'Credit notes', prefix: 'MH-CN', next: 2, ...yr },
+    { type: 'RECEIPT', entityId: le1.id, label: 'Receipts', prefix: 'RCP', next: 65, ...yr },
+    { type: 'RECEIPT', entityId: le2.id, label: 'Receipts', prefix: 'MH-RCP', next: 11, ...yr },
     { type: 'PROJECT', label: 'Projects', prefix: 'PRJ', pattern: '{prefix}-{seq}', padding: 4, next: 28, reset: 'never' },
   ] });
 
@@ -105,7 +121,7 @@ async function main() {
     { k: 'p5', name: 'Data Platform Discovery', customer: 'Asterion Labs', code: 'PRJ-0026', bu: 'Software', contract: 950000, end: 30, health: 'On hold', status: 'ON_HOLD', ms: [ms('a', 'Stakeholder interviews', 30, 285000, 'PAID', -25), ms('b', 'Source assessment', 40, 380000, 'IN_PROGRESS', 9), ms('c', 'Roadmap', 30, 285000, 'PENDING', 30)] },
   ];
   for (const p of projects) {
-    const pr = await prisma.project.create({ data: { name: p.name, code: p.code, customerId: C[p.customer], bu: p.bu, contract: p.contract, endDate: D(p.end), health: p.health, status: p.status, ownerId: U.priya, createdAt: ago(90) } });
+    const pr = await prisma.project.create({ data: { name: p.name, code: p.code, customerId: C[p.customer], entityId: le1.id, unitId: BU[p.bu], contract: p.contract, endDate: D(p.end), health: p.health, status: p.status, ownerId: U.priya, createdAt: ago(90) } });
     P[p.k] = pr.id;
     for (const [i, m] of p.ms.entries()) MS[p.k + m.k] = (await prisma.milestone.create({ data: { projectId: pr.id, seq: i + 1, name: m.name, pct: m.pct, value: m.value, status: m.status, due: D(m.due) } })).id;
   }
@@ -174,7 +190,7 @@ async function main() {
     { k: 'q5', no: 'QT-2026-0090', cust: 'Lumen Schools', title: 'Parent app', date: 0, valid: 30, status: 'DRAFT', by: 'priya', ver: 1, lines: [ln('Senior engineer', 50, 'day', 28000), ln('Product designer', 18, 'day', 22000), ln('Delivery management', 1, 'fixed', 44000)], notes: '' },
     { k: 'q6', no: 'QT-2026-0074', cust: 'Asterion Labs', title: 'Data Platform Discovery', date: -40, valid: -10, status: 'CONVERTED', by: 'priya', ver: 1, project: 'p5', lines: [ln('Stakeholder interviews', 1, 'fixed', 285000, 0, '998313'), ln('Source assessment', 1, 'fixed', 380000, 0, '998313'), ln('Roadmap', 1, 'fixed', 285000, 0, '998313')], notes: '' },
   ];
-  for (const q of quotes) Q[q.k] = (await prisma.quote.create({ data: { no: q.no, customerId: C[q.cust], title: q.title, date: D(q.date), validUntil: D(q.valid), status: q.status, byId: U[q.by], ver: q.ver, lines: q.lines, notes: q.notes, projectId: q.project ? P[q.project] : null, createdAt: ago(-q.date) } })).id;
+  for (const q of quotes) Q[q.k] = (await prisma.quote.create({ data: { no: q.no, entityId: le1.id, customerId: C[q.cust], title: q.title, date: D(q.date), validUntil: D(q.valid), status: q.status, byId: U[q.by], ver: q.ver, lines: q.lines, notes: q.notes, projectId: q.project ? P[q.project] : null, createdAt: ago(-q.date) } })).id;
   await prisma.project.update({ where: { id: P.p5 }, data: { quoteId: Q.q6 } });
 
   // invoices
@@ -189,7 +205,7 @@ async function main() {
     ['i7', 'INV-2026-0097', 'Northwind Retail', 'Annual external pen test 2026', null, null, -75, -45, 'PARTIALLY_PAID', 'meera', [ln('Annual external penetration test 2026 — final report', 1, 'fixed', 400000, 0, '998319')]],
   ];
   for (const [k, no, cust, title, p, m, date, due, status, by, lines] of invs)
-    I[k] = (await prisma.invoice.create({ data: { no, customerId: C[cust], title, projectId: p ? P[p] : null, milestoneId: p && m ? MS[p + m] : null, date: D(date), due: D(due), status, byId: U[by], lines, createdAt: ago(-date) } })).id;
+    I[k] = (await prisma.invoice.create({ data: { no, entityId: le1.id, customerId: C[cust], title, projectId: p ? P[p] : null, milestoneId: p && m ? MS[p + m] : null, date: D(date), due: D(due), status, byId: U[by], lines, createdAt: ago(-date) } })).id;
 
   const pays: [string, string, number, string, string, string, number][] = [
     ['RCP-2026-0064', 'Kestrel Bank', -1, 'NEFT', 'KKBKH26281044', 'i1', 436600], ['RCP-2026-0061', 'Asterion Labs', -10, 'UPI', '628104471932', 'i6', 336300],
@@ -197,8 +213,8 @@ async function main() {
     ['RCP-2026-0049', 'Brightline Health', -40, 'NEFT', 'HDFCN52026082907', 'i4', 1132800],
   ];
   for (const [no, cust, date, method, ref, inv, amt] of pays)
-    await prisma.payment.create({ data: { no, customerId: C[cust], date: D(date), method, ref, createdById: U.meera, allocations: { create: [{ invoiceId: I[inv], amount: amt }] } } });
-  await prisma.creditNote.create({ data: { no: 'CN-2026-0008', invoiceId: I.i7, date: D(-20), taxable: 40000, total: 47200, reason: 'Two findings were outside the agreed scope and removed from the final report.' } });
+    await prisma.payment.create({ data: { no, entityId: le1.id, customerId: C[cust], date: D(date), method, ref, createdById: U.meera, allocations: { create: [{ invoiceId: I[inv], amount: amt }] } } });
+  await prisma.creditNote.create({ data: { no: 'CN-2026-0008', entityId: le1.id, invoiceId: I.i7, date: D(-20), taxable: 40000, total: 47200, reason: 'Two findings were outside the agreed scope and removed from the final report.' } });
 
   // assets
   const assets: [string, string, string, string | null, string | null, string, number][] = [
@@ -247,7 +263,25 @@ async function main() {
   const [y, m] = T.split('-').map(Number);
   for (let i = 0; i < 5; i++) { const d = new Date(Date.UTC(y, m - 1 - (5 - i), 1)); await prisma.legacyMonth.create({ data: { month: d.toISOString().slice(0, 7), invoiced: hist[i][0], collected: hist[i][1] } }); }
 
-  console.log(`Seeded Demo Consulting for ${T}. Sign in as priya@democonsulting.in / demo1234`);
+  // Raman Advisory: Priya's own new organisation, on a trial, not set up yet (the design's second tenant).
+  const RA = 'org_ra4821m1z6';
+  await prisma.organization.create({ data: { id: RA, slug: 'ramanadvisory', name: 'Raman Advisory', plan: 'trial', trialEndsAt: new Date(Date.now() + 9 * 86400e3 - 3600e3), setupDone: false,
+    currency: 'INR', fyStart: 'April', ...orgDefaults('Raman Advisory') } });
+  await tenant(RA);
+  const raRoles: Record<string, string> = {};
+  for (const [i, r] of DEFAULT_ROLES.entries()) raRoles[r.name] = (await prisma.role.create({ data: { name: r.name, desc: r.desc, builtIn: !!r.builtIn, perms: r.perms, sort: i } })).id;
+  await prisma.membership.create({ data: { accountId: A.priya, email: 'priya@democonsulting.in', name: 'Priya Raman', title: 'Founder', roleId: raRoles.Owner, status: 'Active', calendar: false, joinedAt: new Date() } });
+  const ra = await prisma.legalEntity.create({ data: { name: 'Raman Advisory LLP', gstin: '33AAKFR4821M1Z6', pan: 'AAKFR4821M', cin: '', address: 'Old No. 12, Cathedral Road, Chennai 600086', bank: '', upi: '', isDefault: true } });
+  const fy = { pattern: '{prefix}-{fy}-{seq}', padding: 4, next: 1, reset: 'every financial year' };
+  await prisma.series.createMany({ data: [
+    { type: 'INVOICE', entityId: ra.id, label: 'Invoices', prefix: 'INV', ...fy }, { type: 'CREDIT_NOTE', entityId: ra.id, label: 'Credit notes', prefix: 'CN', ...fy },
+    { type: 'RECEIPT', entityId: ra.id, label: 'Receipts', prefix: 'RCP', ...fy }, { type: 'QUOTATION', label: 'Quotations', prefix: 'QT', ...fy },
+    { type: 'PROJECT', label: 'Projects', prefix: 'PRJ', pattern: '{prefix}-{seq}', padding: 4, next: 1, reset: 'never' },
+  ] });
+  await prisma.sac.createMany({ data: DEFAULT_SAC });
+  await prisma.$executeRaw`SELECT set_config('app.org_id', '', false)`;
+
+  console.log(`Seeded Demo Consulting and Raman Advisory for ${T}. Sign in as priya@democonsulting.in / demo1234`);
 }
 
 main().catch(e => { console.error(e); process.exit(1); }).finally(() => prisma.$disconnect());

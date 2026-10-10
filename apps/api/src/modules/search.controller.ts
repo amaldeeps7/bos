@@ -27,7 +27,7 @@ export class SearchController {
 
     if (has('customer.read')) add('customer', 'Customers', async () => (await this.prisma.customer.findMany({ where: { archived: false, OR: [{ name: I(q) }, { gstin: I(q) }, { city: I(q) }, { contact: I(q) }, { email: I(q) }] }, take }))
       .map(c => ({ type: 'customer', id: c.id, title: c.name, sub: `${c.gstin} · ${c.city}`, href: `/customers/${c.id}` })));
-    if (has('project.read')) add('project', 'Projects', async () => (await this.prisma.project.findMany({ where: { OR: [{ name: I(q) }, { code: I(q) }, { bu: I(q) }, { customer: { name: I(q) } }] }, include: { customer: true }, take }))
+    if (has('project.read')) add('project', 'Projects', async () => (await this.prisma.project.findMany({ where: { OR: [{ name: I(q) }, { code: I(q) }, { unit: { name: I(q) } }, { customer: { name: I(q) } }] }, include: { customer: true }, take }))
       .map(p => ({ type: 'project', id: p.id, title: p.name, sub: `${p.code} · ${p.customer.name} · ${p.health}`, href: `/projects/${p.id}` })));
     if (has('task.read')) add('task', 'Tasks', async () => {
       const scope: Prisma.TaskWhereInput = has('task.read_all') ? {} : { OR: [{ assigneeId: me.id }, { reporterId: me.id }] };
@@ -48,7 +48,7 @@ export class SearchController {
       .map(o => ({ type: 'deal', id: o.id, title: o.name, sub: `${o.customer.name} · ${inr(o.value)}`, href: '/pipeline' })));
     if (has('asset.read')) add('asset', 'Assets', async () => (await this.prisma.asset.findMany({ where: { OR: [{ name: I(q) }, { code: I(q) }, { cat: I(q) }] }, take }))
       .map(a => ({ type: 'asset', id: a.id, title: a.name, sub: `${a.code} · ${a.cat}`, href: '/assets' })));
-    add('person', 'People', async () => (await this.prisma.user.findMany({ where: { status: { not: 'Deactivated' }, OR: [{ name: I(q) }, { email: I(q) }, { title: I(q) }, { dept: I(q) }] }, include: { role: true }, take }))
+    add('person', 'People', async () => (await this.prisma.membership.findMany({ where: { status: { not: 'Deactivated' }, OR: [{ name: I(q) }, { email: I(q) }, { title: I(q) }, { dept: I(q) }] }, include: { role: true }, take }))
       .map(u => ({ type: 'person', id: u.id, title: u.name, sub: `${u.title || u.role.name}${u.dept ? ` · ${u.dept}` : ''} · ${u.status === 'Invited' ? 'invited' : u.email}`, href: u.status === 'Active' ? `/team/${u.id}` : has('user.read') ? '/settings/users' : undefined })));
 
     // Best matches first: a hit whose title starts with the query (or a word in it does) beats one found only in a note.

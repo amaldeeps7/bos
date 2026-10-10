@@ -4,11 +4,15 @@ import { Test } from '@nestjs/testing';
 import { execSync } from 'child_process';
 import cookieParser from 'cookie-parser';
 import request from 'supertest';
+import { PrismaClient } from '@prisma/client';
 import { AppModule } from '../src/app.module';
 
 let app: INestApplication;
-const login = async (email: string) => {
-  const res = await request(app.getHttpServer()).post('/api/auth/login').send({ email, password: 'demo1234' }).expect(200);
+/** Owner connection (bypasses RLS) for checking what the API wrote. The API itself runs as bos_app. */
+const db = new PrismaClient({ datasourceUrl: process.env.MIGRATE_DATABASE_URL || process.env.DATABASE_URL });
+// Sign-in returns you to the organisation you used last; tests name the one they mean.
+const login = async (email: string, org = 'democonsulting') => {
+  const res = await request(app.getHttpServer()).post('/api/auth/login').send({ email, password: 'demo1234', org }).expect(200);
   return res.headers['set-cookie'] as unknown as string[];
 };
 
@@ -18,7 +22,7 @@ beforeAll(async () => {
   app = mod.createNestApplication(); app.setGlobalPrefix('api'); app.use(cookieParser());
   await app.init();
 }, 60000);
-afterAll(async () => { await app?.close(); });
+afterAll(async () => { await app?.close(); await db.$disconnect(); });
 
 describe('auth and access', () => {
   it('rejects a wrong password and anonymous requests', async () => {
@@ -91,7 +95,8 @@ describe('billing', () => {
 
   it('keeps numbering forward-only', async () => {
     const owner = await login('anand@democonsulting.in');
-    await request(app.getHttpServer()).patch('/api/settings/series/INVOICE').set('Cookie', owner).send({ prefix: 'INV', pattern: '{prefix}-{yyyy}-{seq}', padding: 4, next: 5 }).expect(400);
+    const inv = (await request(app.getHttpServer()).get('/api/settings').set('Cookie', owner)).body.series.find((x: any) => x.type === 'INVOICE' && x.prefix === 'INV');
+    await request(app.getHttpServer()).patch(`/api/settings/series/${inv.id}`).set('Cookie', owner).send({ prefix: 'INV', pattern: '{prefix}-{yyyy}-{seq}', padding: 4, next: 5 }).expect(400);
   });
 });
 
@@ -124,8 +129,7 @@ describe('documents, email, people and search', () => {
   it('invites by email with a one-time link', async () => {
     const pm = await login('priya@democonsulting.in');
     await request(app.getHttpServer()).post('/api/settings/users/invite').set('Cookie', pm).send({ email: 'invitee@democonsulting.in', role: 'Sales' }).expect(201);
-    const { PrismaClient } = await import('@prisma/client'); const db = new PrismaClient();
-    const u = await db.user.findUniqueOrThrow({ where: { email: 'invitee@democonsulting.in' } }); await db.$disconnect();
+    const u = await db.membership.findFirstOrThrow({ where: { email: 'invitee@democonsulting.in' } });
     await request(app.getHttpServer()).get(`/api/auth/invite/${u.inviteToken}`).expect(200);
     await request(app.getHttpServer()).post('/api/auth/accept-invite').send({ token: u.inviteToken, name: 'Invitee', password: 'invitee-password' }).expect(200);
     await request(app.getHttpServer()).get(`/api/auth/invite/${u.inviteToken}`).expect(400);
@@ -204,8 +208,7 @@ describe('team and profiles', () => {
   });
 
   it('honours notification and calendar switches', async () => {
-    const { PrismaService } = await import('../src/core/prisma.service');
-    const prisma = app.get(PrismaService);
+    const prisma = db;
     const dev = await login('dev@democonsulting.in'); const devId = await idOf(dev);
     await http().patch('/api/me/prefs').set('Cookie', dev).send({ mention: false, calendar: false }).expect(200);
     // comment on a task Dev reported? use one assigned to Dev, by Priya
@@ -220,10 +223,9 @@ describe('team and profiles', () => {
   });
 
   it('sends meeting reminders and the daily digest once, to people who want them', async () => {
-    const { PrismaService } = await import('../src/core/prisma.service');
     const { SchedulerService } = await import('../src/modules/scheduler.service');
     const { todayISO } = await import('@bos/shared');
-    const prisma = app.get(PrismaService); const sched = app.get(SchedulerService);
+    const prisma = db; const sched = app.get(SchedulerService);
     const dev = await login('dev@democonsulting.in'); const devId = await idOf(dev);
     await http().patch('/api/me/prefs').set('Cookie', dev).send({ remind: false }).expect(200);
     const today = todayISO('Asia/Kolkata');
@@ -239,5 +241,148 @@ describe('team and profiles', () => {
     expect(to.filter(t => t === 'priya@democonsulting.in')).toHaveLength(1);
     expect(to).not.toContain('meera@democonsulting.in'); // on leave
     await http().patch('/api/me/prefs').set('Cookie', dev).send({ remind: true }).expect(200);
+  });
+});
+
+describe('multitenancy (spec §9)', () => {
+  const http = () => request(app.getHttpServer());
+  const DEMO = 'org_7f3k2q9xw1';
+  let b: { cookie: string[]; id: string };
+
+  /** A second organisation, created through public sign-up by a new account. */
+  beforeAll(async () => {
+    const res = await http().post('/api/signup').send({
+      name: 'Kestrel Advisory', slug: 'kestrel-advisory', currency: 'INR', fy: 'April',
+      entity: { name: 'Kestrel Advisory LLP', gstin: '29AAKFK1234M1Z5', address: 'Bengaluru' },
+      numbering: { inv: 'INV', qt: 'QT', pattern: '{prefix}-{yyyy}-{seq}' },
+      account: { name: 'Kiran Rao', email: 'kiran@kestrel-advisory.in', password: 'kestrel-password-1' },
+    }).expect(201);
+    b = { cookie: res.headers['set-cookie'] as unknown as string[], id: res.body.id };
+  }, 30000);
+
+  it('signs up a new organisation with its own Owner, entity and numbering; slugs are unique', async () => {
+    const me = (await http().get('/api/auth/me').set('Cookie', b.cookie).expect(200)).body;
+    expect(me.user.roleName).toBe('Owner'); expect(me.org.plan).toBe('trial'); expect(me.org.setupDone).toBe(false);
+    expect(me.entities).toHaveLength(1); expect(me.orgs).toHaveLength(1);
+    await http().post('/api/signup').send({ name: 'X', slug: 'kestrel-advisory', entity: { name: 'X', gstin: '29AAKFK1234M1Z5' }, account: { name: 'Y', email: 'y@y.in', password: 'yyyyyyyyyyyy' } }).expect(400);
+    await http().post('/api/auth/login').send({ email: 'kiran@kestrel-advisory.in', password: 'kestrel-password-1' }).expect(200);
+  });
+
+  it('allows the same customer GSTIN and invoice number in two organisations', async () => {
+    const owner = await login('anand@democonsulting.in');
+    const demoInv = (await http().get('/api/invoices').set('Cookie', owner)).body.find((i: any) => i.no === 'INV-2026-0142');
+    // Org B: same GSTIN as Demo's Kestrel Bank, and a series lined up to issue INV-2026-0142 too.
+    const cust = await http().post('/api/customers').set('Cookie', b.cookie).send({ name: 'Kestrel Bank', gstin: '27AAACK4821M1Z5', city: 'Mumbai', email: 'ap@kestrelbank.in' }).expect(201);
+    const s = (await http().get('/api/settings').set('Cookie', b.cookie)).body.series.find((x: any) => x.type === 'INVOICE');
+    await http().patch(`/api/settings/series/${s.id}`).set('Cookie', b.cookie).send({ prefix: 'INV', pattern: '{prefix}-{yyyy}-{seq}', padding: 4, next: 142 }).expect(200);
+    const inv = await http().post('/api/invoices').set('Cookie', b.cookie).send({ customerId: cust.body.id, lines: [{ d: 'Advisory', qty: 1, unit: 'fixed', rate: 100000 }] }).expect(201);
+    expect(inv.body.message).toMatch(new RegExp(`^${demoInv.no.slice(0, 9)}`));
+    const mine = (await http().get('/api/invoices').set('Cookie', b.cookie)).body;
+    expect(mine.map((i: any) => i.no)).toEqual([demoInv.no]);
+  });
+
+  it('never shows or changes another organisation’s records: 404, not 403', async () => {
+    const owner = await login('anand@democonsulting.in');
+    const theirs = (await http().get('/api/invoices').set('Cookie', b.cookie)).body[0];
+    const theirCust = (await http().get('/api/customers').set('Cookie', b.cookie)).body[0];
+    expect((await http().get('/api/invoices').set('Cookie', owner)).body.some((i: any) => i.id === theirs.id)).toBe(false);
+    expect((await http().get('/api/customers').set('Cookie', owner)).body.some((c: any) => c.id === theirCust.id)).toBe(false);
+    await http().get(`/api/invoices/${theirs.id}/pdf`).set('Cookie', owner).expect(404);
+    await http().post(`/api/invoices/${theirs.id}/submit`).set('Cookie', owner).expect(404);
+    await http().patch(`/api/customers/${theirCust.id}`).set('Cookie', owner).send({ name: 'Hijacked' }).expect(404);
+    const search = (await http().get('/api/search?q=Kestrel').set('Cookie', owner)).body;
+    expect(JSON.stringify(search)).not.toContain(theirCust.id);
+    // The other way round too.
+    const demoCust = (await http().get('/api/customers').set('Cookie', owner)).body[0];
+    await http().patch(`/api/customers/${demoCust.id}`).set('Cookie', b.cookie).send({ name: 'Hijacked' }).expect(404);
+    // A token for org B can't be pointed at org A.
+    await http().post('/api/auth/switch').set('Cookie', b.cookie).send({ orgId: DEMO }).expect(403);
+  });
+
+  it('returns no rows to raw SQL when app.org_id is unset (database-level isolation)', async () => {
+    const appDb = new PrismaClient({ datasourceUrl: process.env.DATABASE_URL });
+    try {
+      const [{ n }] = await appDb.$queryRaw<{ n: bigint }[]>`SELECT count(*) AS n FROM "Invoice"`;
+      expect(Number(n)).toBe(0);
+      const [{ m }] = await appDb.$queryRaw<{ m: bigint }[]>`SELECT count(*) AS m FROM "Customer"`;
+      expect(Number(m)).toBe(0);
+    } finally { await appDb.$disconnect(); }
+  });
+
+  it('numbers concurrent invoices per entity without gaps or clashes', async () => {
+    const fin = await login('meera@democonsulting.in');
+    const me = (await http().get('/api/auth/me').set('Cookie', fin)).body;
+    const [le1, le2] = me.entities; const cust = (await http().get('/api/customers').set('Cookie', fin)).body[0];
+    const make = (entityId: string) => http().post('/api/invoices').set('Cookie', fin).send({ customerId: cust.id, entityId, lines: [{ d: 'x', qty: 1, unit: 'fixed', rate: 1000 }] }).expect(201);
+    const rs = await Promise.all([le1, le2, le1, le2, le1, le2].map(e => make(e.id)));
+    const nos = rs.map(r => r.body.message.split(' ')[0]);
+    const seqs = (p: string) => nos.filter(n => n.startsWith(p)).map(n => +n.slice(-4)).sort((a, z) => a - z);
+    const a = seqs('INV-'), m = seqs('MH-INV-');
+    expect(a).toHaveLength(3); expect(m).toHaveLength(3);
+    expect(a[2] - a[0]).toBe(2); expect(m[2] - m[0]).toBe(2); // contiguous within each entity
+    expect(new Set(nos).size).toBe(6);
+  });
+
+  it('keeps caches per organisation: switching modules in one leaves the other alone', async () => {
+    const r = await http().post('/api/auth/login').send({ email: 'priya@democonsulting.in', password: 'demo1234', org: 'ramanadvisory' }).expect(200);
+    const ra = r.headers['set-cookie'] as unknown as string[];
+    expect((await http().get('/api/auth/me').set('Cookie', ra)).body.org.name).toBe('Raman Advisory');
+    await http().patch('/api/settings/modules/crm').set('Cookie', ra).send({ on: false }).expect(200);
+    await http().get('/api/customers').set('Cookie', ra).expect(403);
+    const pm = await login('priya@democonsulting.in');
+    await http().get('/api/customers').set('Cookie', pm).expect(200);
+    await http().patch('/api/settings/modules/crm').set('Cookie', ra).send({ on: true }).expect(200);
+    // Switching re-issues the session for the other organisation.
+    const sw = await http().post('/api/auth/switch').set('Cookie', ra).send({ orgId: DEMO }).expect(200);
+    const back = sw.headers['set-cookie'] as unknown as string[];
+    expect((await http().get('/api/auth/me').set('Cookie', back)).body.org.name).toBe('Demo Consulting');
+  });
+
+  it('limits a member scoped to one entity to that entity’s documents', async () => {
+    const owner = await login('anand@democonsulting.in');
+    const me = (await http().get('/api/auth/me').set('Cookie', owner)).body; const le2 = me.entities[1];
+    const meera = (await http().get('/api/settings').set('Cookie', owner)).body.users.find((u: any) => u.email === 'meera@democonsulting.in');
+    await http().patch(`/api/settings/users/${meera.id}`).set('Cookie', owner).send({ scope: `le:${le2.id}` }).expect(200);
+    const fin = await login('meera@democonsulting.in');
+    const invs = (await http().get('/api/invoices').set('Cookie', fin)).body;
+    expect(invs.length).toBeGreaterThan(0);
+    expect(invs.every((i: any) => i.entityId === le2.id)).toBe(true);
+    const le1Inv = (await http().get('/api/invoices').set('Cookie', owner)).body.find((i: any) => i.entityId !== le2.id);
+    await http().get(`/api/invoices/${le1Inv.id}/pdf`).set('Cookie', fin).expect(404);
+    await http().patch(`/api/settings/users/${meera.id}`).set('Cookie', owner).send({ scope: 'all' }).expect(200);
+  });
+
+  it('refuses the "as … (demo)" fallback outside a demo organisation', async () => {
+    const pm = await login('priya@democonsulting.in'); // Project manager: no payment.create
+    const inv = (await http().get('/api/invoices').set('Cookie', pm)).body.find((i: any) => i.bal > 0);
+    await db.organization.update({ where: { id: DEMO }, data: { demo: false } });
+    try {
+      await http().post('/api/payments').set('Cookie', pm).send({ invoiceId: inv.id, amount: 1, method: 'NEFT', ref: 'X' }).expect(403);
+    } finally { await db.organization.update({ where: { id: DEMO }, data: { demo: true } }); }
+  });
+
+  it('exports everything as a ZIP behind a signed, expiring link', async () => {
+    const owner = await login('anand@democonsulting.in');
+    await http().post('/api/orgs/current/export').set('Cookie', owner).expect(201);
+    let x: any;
+    for (let i = 0; i < 60 && x?.status !== 'Ready'; i++) { await new Promise(r => setTimeout(r, 250)); x = (await http().get('/api/orgs/current/data').set('Cookie', owner)).body.exports[0]; }
+    expect(x.status).toBe('Ready');
+    const path = new URL(x.url).pathname + new URL(x.url).search;
+    const zip = await http().get(path).buffer(true).parse((res, cb) => { const c: Buffer[] = []; res.on('data', d => c.push(d)); res.on('end', () => cb(null, Buffer.concat(c))); }).expect(200);
+    expect((zip.body as Buffer).slice(0, 2).toString()).toBe('PK');
+    await http().get(path.replace(/sig=[0-9a-f]/, 'sig=0')).expect(400);
+    // Another organisation's members can't list it.
+    expect((await http().get('/api/orgs/current/data').set('Cookie', b.cookie)).body.exports).toHaveLength(0);
+  }, 30000);
+
+  it('enforces plan limits and lets only the Owner close the organisation', async () => {
+    const owner = await login('anand@democonsulting.in');
+    await http().patch('/api/orgs/current/plan').set('Cookie', owner).send({ plan: 'starter' }).expect(400); // 8 people, 2 entities
+    const pm = await login('priya@democonsulting.in');
+    await http().delete('/api/orgs/current').set('Cookie', pm).send({ confirm: 'Demo Consulting' }).expect(403);
+    await http().delete('/api/orgs/current').set('Cookie', b.cookie).send({ confirm: 'wrong' }).expect(400);
+    await http().delete('/api/orgs/current').set('Cookie', b.cookie).send({ confirm: 'Kestrel Advisory' }).expect(200);
+    await http().get('/api/auth/me').set('Cookie', b.cookie).expect(401);
+    await http().post('/api/auth/login').send({ email: 'kiran@kestrel-advisory.in', password: 'kestrel-password-1' }).expect(401);
   });
 });

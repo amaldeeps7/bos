@@ -7,6 +7,7 @@ import { AccessService } from '../core/access.service';
 import { AuditService } from '../core/audit.service';
 import { NumberingService } from '../core/numbering.service';
 import { NotifyService } from '../core/notify.service';
+import { OrgService } from '../core/org.service';
 import { Me, Perm } from '../core/decorators';
 import type { AuthUser } from '../core/auth.types';
 import { d, num, oneOf, str, toDate } from '../core/util';
@@ -18,7 +19,14 @@ const METHODS = ['NEFT', 'RTGS', 'IMPS', 'UPI', 'Cheque'] as const;
 @Controller('invoices')
 export class InvoicesController {
   constructor(private prisma: PrismaService, private fin: FinanceService, private audit: AuditService, private access: AccessService,
-    private numbering: NumberingService, private approvals: ApprovalsService, private notify: NotifyService, private docs: DocumentsService) {}
+    private numbering: NumberingService, private approvals: ApprovalsService, private notify: NotifyService, private docs: DocumentsService, private orgs: OrgService) {}
+
+  /** Moving a draft to another issuing entity gives it a number from that entity's series (GST: one series per GSTIN). */
+  private async renumber(old: { status: string }, entityId: string) {
+    if (old.status !== 'DRAFT') throw new BadRequestException('Only a draft can change its issuing entity.');
+    const e = await this.orgs.entity(entityId);
+    return { entityId: e.id, no: await this.numbering.next('INVOICE', { entityId: e.id }) };
+  }
 
   @Get(':id/pdf') @Perm('invoice.read')
   async pdf(@Param('id') id: string, @Res() res: Response) {
@@ -40,7 +48,7 @@ export class InvoicesController {
     const out: Record<string, { self: boolean; name: string } | null> = {};
     for (const p of ['invoice.issue', 'invoice.send', 'payment.create', 'credit_note.issue', 'quote.send']) {
       if (AccessService.has(me, p)) out[p] = { self: true, name: me.name };
-      else { const w = process.env.DEMO_MODE === 'true' ? await this.access.whoCan(p, me.id) : null; out[p] = w ? { self: false, name: w.name } : null; }
+      else { const w = me.demo ? await this.access.whoCan(p, me.id, me) : null; out[p] = w ? { self: false, name: w.name } : null; }
     }
     return out;
   }
@@ -58,11 +66,12 @@ export class InvoicesController {
       AccessService.require(me, 'invoice.update_draft');
       const old = await this.one(b.id);
       if (!['DRAFT', 'APPROVED'].includes(old.status)) throw new BadRequestException('Issued invoices are locked. Raise a credit note instead.');
-      await this.prisma.invoice.update({ where: { id: old.id }, data: { customerId: cust.id, title, lines, notes: str(b.notes, 'Notes'), due: new Date(old.date.getTime() + days * 86400000), status: 'DRAFT' } });
+      await this.prisma.invoice.update({ where: { id: old.id }, data: { customerId: cust.id, ...(b.entityId && b.entityId !== old.entityId ? await this.renumber(old, String(b.entityId)) : {}), title, lines, notes: str(b.notes, 'Notes'), due: new Date(old.date.getTime() + days * 86400000), status: 'DRAFT' } });
       id = old.id; no = old.no;
     } else {
+      const entityId = (await this.orgs.entity(b.entityId || null)).id;
       const inv = await this.prisma.$transaction(async tx => tx.invoice.create({ data: {
-        no: await this.numbering.next('INVOICE', tx), customerId: cust.id, title, lines, notes: str(b.notes, 'Notes'), date: toDate(today),
+        no: await this.numbering.next('INVOICE', { entityId }, tx), entityId, customerId: cust.id, title, lines, notes: str(b.notes, 'Notes'), date: toDate(today),
         due: new Date(toDate(today).getTime() + days * 86400000), status: 'DRAFT', byId: me.id, projectId: b.projectId || null, milestoneId: b.milestoneId || null } }));
       id = inv.id; no = inv.no;
       await this.audit.log(me, `${me.name} drafted ${no}`, 'icon-file-plus', 'invoice');
@@ -140,8 +149,8 @@ export class PaymentsController {
     if (!amt) throw new BadRequestException('Enter the amount received.');
     const method = oneOf(b.method || 'NEFT', 'Method', METHODS); const full = amt >= f.bal;
     const no = await this.prisma.$transaction(async tx => {
-      const no = await this.numbering.next('RECEIPT', tx);
-      await tx.payment.create({ data: { no, customerId: inv.customerId, date: toDate(c.today), method, ref: str(b.ref, 'Reference', { max: 100 }).trim() || '—', createdById: who.id, allocations: { create: [{ invoiceId: inv.id, amount: amt }] } } });
+      const no = await this.numbering.next('RECEIPT', { entityId: inv.entityId }, tx);
+      await tx.payment.create({ data: { no, entityId: inv.entityId, customerId: inv.customerId, date: toDate(c.today), method, ref: str(b.ref, 'Reference', { max: 100 }).trim() || '—', createdById: who.id, allocations: { create: [{ invoiceId: inv.id, amount: amt }] } } });
       await tx.invoice.update({ where: { id: inv.id }, data: { status: full ? 'PAID' : 'PARTIALLY_PAID' } });
       if (full && inv.milestoneId) await tx.milestone.update({ where: { id: inv.milestoneId }, data: { status: 'PAID', changedAt: new Date() } });
       return no;
@@ -208,8 +217,8 @@ export class CreditNotesController {
     if (!reason) throw new BadRequestException('Give a reason. It prints on the credit note.');
     const total = Math.min(taxable + Math.round(taxable * 0.18), f.bal);
     const cn = await this.prisma.$transaction(async tx => {
-      const no = await this.numbering.next('CREDIT_NOTE', tx);
-      const cn = await tx.creditNote.create({ data: { no, invoiceId: inv.id, date: toDate(c.today), taxable, total, reason } });
+      const no = await this.numbering.next('CREDIT_NOTE', { entityId: inv.entityId }, tx);
+      const cn = await tx.creditNote.create({ data: { no, entityId: inv.entityId, invoiceId: inv.id, date: toDate(c.today), taxable, total, reason } });
       if (total >= f.bal) await tx.invoice.update({ where: { id: inv.id }, data: { status: 'PAID' } });
       return cn;
     });

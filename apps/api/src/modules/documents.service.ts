@@ -13,10 +13,12 @@ const initials = (n: string) => n.split(' ').map(w => w[0]).join('').slice(0, 2)
 export class DocumentsService {
   constructor(private prisma: PrismaService, private orgs: OrgService, private pdf: PdfService, private mail: MailService) {}
 
-  private async base() {
-    const c = await this.orgs.ctx();
-    if (!c.entity) throw new BadRequestException('Set up a legal entity first (Settings → Legal entities)');
-    const e = c.entity;
+  /** Organisation context plus the issuing entity of the document (its state decides CGST+SGST or IGST). */
+  private async base(entityId?: string | null) {
+    const c0 = await this.orgs.ctx();
+    if (!c0.entity) throw new BadRequestException('Set up a legal entity first (Settings → Legal entities)');
+    const e = await this.orgs.entity(entityId);
+    const c = { ...c0, entity: e, ourState: e.state };
     const entity = { name: e.name, gstin: e.gstin, lines: [e.address], bank: e.bank, upi: e.upi, initials: initials(c.org.name) };
     return { c, entity, templates: c.org.templates as unknown as Record<'invoice' | 'quote', Template & { subject: string }> };
   }
@@ -27,9 +29,9 @@ export class DocumentsService {
 
   async quotePdf(id: string) {
     const q = await this.prisma.quote.findUnique({ where: { id }, include: { customer: true } }); if (!q) throw new NotFoundException();
-    const { c, entity, templates } = await this.base(); const st = stateOf(q.customer.gstin);
+    const { c, entity, templates } = await this.base(q.entityId); const st = stateOf(q.customer.gstin);
     const k = calc(q.lines as unknown as Line[], st, c.ourState, c.sacRates);
-    const by = await this.prisma.user.findUnique({ where: { id: q.byId } });
+    const by = await this.prisma.membership.findUnique({ where: { id: q.byId } });
     const buffer = await this.pdf.render({ template: templates.quote, no: q.no, entity, to: this.party(q.customer), toLabel: 'Prepared for', calc: k, notes: q.notes, supplyNote: this.supply(k.intra, st),
       meta: [['Date', fmtDLong(d(q.date))], ['Valid until', fmtDLong(d(q.validUntil))], ...(q.ver > 1 ? [['Version', String(q.ver)] as [string, string]] : []), ['Prepared by', by?.name || '']] });
     return { buffer, filename: `${q.no}.pdf`, q, k };
@@ -37,7 +39,7 @@ export class DocumentsService {
 
   async invoicePdf(id: string) {
     const i = await this.prisma.invoice.findUnique({ where: { id }, include: { customer: true, allocations: true, credits: true } }); if (!i) throw new NotFoundException();
-    const { c, entity, templates } = await this.base(); const st = stateOf(i.customer.gstin);
+    const { c, entity, templates } = await this.base(i.entityId); const st = stateOf(i.customer.gstin);
     const k = calc(i.lines as unknown as Line[], st, c.ourState, c.sacRates);
     const paid = i.allocations.reduce((a, x) => a + x.amount, 0), credited = i.credits.reduce((a, x) => a + x.total, 0);
     const issued = !UNISSUED.includes(i.status);
@@ -51,7 +53,7 @@ export class DocumentsService {
 
   async creditPdf(id: string) {
     const cn = await this.prisma.creditNote.findUnique({ where: { id }, include: { invoice: { include: { customer: true } } } }); if (!cn) throw new NotFoundException();
-    const { c, entity, templates } = await this.base(); const st = stateOf(cn.invoice.customer.gstin);
+    const { c, entity, templates } = await this.base(cn.entityId); const st = stateOf(cn.invoice.customer.gstin);
     const k = calc([{ d: `Credit against ${cn.invoice.no}: ${cn.reason}`, qty: 1, unit: 'credit', rate: cn.taxable, disc: 0, sac: (cn.invoice.lines as any)[0]?.sac || '998314' }], st, c.ourState, c.sacRates);
     const buffer = await this.pdf.render({ template: { ...templates.invoice, title: 'Credit note', show: { ...templates.invoice.show, upi: false, bank: false } }, no: cn.no, entity, to: this.party(cn.invoice.customer), toLabel: 'Issued to',
       calc: k, supplyNote: this.supply(k.intra, st), reference: `Against invoice ${cn.invoice.no} dated ${fmtD(d(cn.invoice.date))}`,
@@ -59,7 +61,7 @@ export class DocumentsService {
     return { buffer, filename: `${cn.no}.pdf`, cn };
   }
 
-  private async sender(userId: string) { return this.prisma.user.findUnique({ where: { id: userId } }); }
+  private async sender(userId: string) { return this.prisma.membership.findUnique({ where: { id: userId } }); }
 
   async emailQuote(id: string, userId: string) {
     const { buffer, filename, q, k } = await this.quotePdf(id); const { c, templates, entity } = await this.base(); const u = await this.sender(userId);
@@ -82,7 +84,7 @@ export class DocumentsService {
     const rem = c.org.reminders as any;
     const vars = { number: i.no, customer: i.customer.name, amount: inr(bal), due: fmtD(d(i.due)), contact: i.customer.contact.split(',')[0] || 'there' };
     const text = fill(rem.body, vars);
-    const owner = ccOwner ? await this.prisma.user.findUnique({ where: { id: i.customer.ownerId } }) : null;
+    const owner = ccOwner ? await this.prisma.membership.findUnique({ where: { id: i.customer.ownerId } }) : null;
     return this.mail.send({ to: i.customer.email, cc: owner ? [owner.email] : undefined, subject: fill(rem.subject, vars), text, html: htmlOf(text, templates.invoice.accent), attachments: [{ filename, content: buffer, contentType: 'application/pdf' }], kind: 'reminder', ref: i.no, userId });
   }
 

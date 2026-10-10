@@ -7,6 +7,7 @@ import { Me, Perm } from '../core/decorators';
 import type { AuthUser } from '../core/auth.types';
 import { d, num, oneOf, str, toDate } from '../core/util';
 import { FinanceService } from './finance.service';
+import { orgId } from '../core/tenant';
 
 @Controller('projects')
 export class ProjectsController {
@@ -14,8 +15,8 @@ export class ProjectsController {
 
   @Get() @Perm('project.read')
   async list() {
-    const rows = await this.prisma.project.findMany({ include: { milestones: { orderBy: { seq: 'asc' } }, customer: true }, orderBy: { code: 'asc' } });
-    return rows.map(p => ({ id: p.id, name: p.name, code: p.code, customerId: p.customerId, customer: p.customer.name, bu: p.bu, contract: p.contract, endDate: d(p.endDate),
+    const rows = await this.prisma.project.findMany({ include: { milestones: { orderBy: { seq: 'asc' } }, customer: true, unit: true }, orderBy: { code: 'asc' } });
+    return rows.map(p => ({ id: p.id, name: p.name, code: p.code, customerId: p.customerId, customer: p.customer.name, bu: p.unit?.name || '', unitId: p.unitId, entityId: p.entityId, contract: p.contract, endDate: d(p.endDate),
       health: p.health, status: p.status, ownerId: p.ownerId, quoteId: p.quoteId, createdAt: p.createdAt.toISOString(),
       milestones: p.milestones.map(m => ({ id: m.id, seq: m.seq, name: m.name, pct: m.pct, value: m.value, status: m.status, due: d(m.due), changedAt: m.changedAt?.toISOString() || null })) }));
   }
@@ -27,13 +28,25 @@ export class ProjectsController {
     const cust = await this.prisma.customer.findUnique({ where: { id: str(b.customerId, 'Customer', { required: true }) } }); if (!cust) throw new BadRequestException('Pick a customer');
     const contract = Math.round(num(b.contract ?? 0, 'Contract value', { min: 0 }));
     const ms: any[] = Array.isArray(b.milestones) ? b.milestones.filter((m: any) => String(m?.name || '').trim()) : [];
+    const { unitId, entityId } = await this.placement(b);
     const p = await this.prisma.$transaction(async tx => {
-      const code = await this.numbering.next('PROJECT', tx);
-      return tx.project.create({ data: { name, code, customerId: cust.id, bu: str(b.bu || 'Software', 'Business unit', { max: 80 }), contract, endDate: toDate(b.endDate), health: 'On track', status: 'ACTIVE', ownerId: b.ownerId || me.id,
+      const code = await this.numbering.next('PROJECT', {}, tx);
+      return tx.project.create({ data: { name, code, customerId: cust.id, unitId, entityId, contract, endDate: toDate(b.endDate), health: 'On track', status: 'ACTIVE', ownerId: b.ownerId || me.id,
         milestones: { create: ms.map((m, i) => { const pct = num(m.pct ?? 0, 'Share', { min: 0, max: 100 }); return { seq: i + 1, name: String(m.name).trim(), pct, value: Math.round(contract * pct / 100), due: toDate(m.due || b.endDate), status: i === 0 ? 'IN_PROGRESS' : 'PENDING' }; }) } } });
     });
     await this.audit.log(me, `Started ${p.code} ${p.name} for ${cust.name}`, 'icon-folder-plus', 'project');
     return { id: p.id, message: `${p.code} created.` };
+  }
+
+  /** Business unit (by id, or by name for older clients) and the entity that bills the project (the unit's, unless chosen). */
+  private async placement(b: any) {
+    const unit = b.unitId ? await this.prisma.businessUnit.findUnique({ where: { id: String(b.unitId) } })
+      : b.bu ? await this.prisma.businessUnit.findFirst({ where: { name: String(b.bu) } }) : null;
+    if ((b.unitId || b.bu) && !unit && b.unitId) throw new BadRequestException('Unknown business unit');
+    const entity = b.entityId ? await this.prisma.legalEntity.findUnique({ where: { id: String(b.entityId) } })
+      : unit ? await this.prisma.legalEntity.findUnique({ where: { id: unit.entityId } }) : await this.prisma.legalEntity.findFirst({ orderBy: [{ isDefault: 'desc' }, { name: 'asc' }] });
+    if (!entity) throw new BadRequestException(b.entityId ? 'Unknown legal entity' : 'Add a legal entity first (Settings → Legal entities)');
+    return { unitId: unit?.id ?? null, entityId: entity.id };
   }
 
   @Patch(':id') @Perm('project.update')
@@ -41,14 +54,14 @@ export class ProjectsController {
     const p = await this.prisma.project.findUnique({ where: { id } }); if (!p) throw new NotFoundException();
     const data: any = {};
     if (b.name !== undefined) { data.name = str(b.name, 'Name', { max: 200 }).trim(); if (!data.name) throw new BadRequestException('Name the project.'); }
-    if (b.bu !== undefined) data.bu = str(b.bu, 'Business unit', { max: 80 });
+    if (b.bu !== undefined || b.unitId !== undefined || b.entityId !== undefined) Object.assign(data, await this.placement({ unitId: b.unitId, bu: b.bu, entityId: b.entityId || (b.unitId || b.bu ? undefined : p.entityId) }));
     if (b.contract !== undefined) data.contract = Math.round(num(b.contract, 'Contract value', { min: 0 }));
     if (b.endDate !== undefined) data.endDate = toDate(b.endDate);
     if (b.health !== undefined) data.health = oneOf(b.health, 'Health', ['On track', 'At risk', 'On hold']);
     if (b.status !== undefined) data.status = oneOf(b.status, 'Status', ['ACTIVE', 'ON_HOLD', 'COMPLETED', 'CANCELLED']);
     if (b.ownerId !== undefined && b.ownerId !== p.ownerId) {
       AccessService.require(me, 'project.change_owner');
-      const u = await this.prisma.user.findUnique({ where: { id: String(b.ownerId) } }); if (!u || u.status !== 'Active') throw new BadRequestException('Pick an active person');
+      const u = await this.prisma.membership.findUnique({ where: { id: String(b.ownerId) } }); if (!u || u.status !== 'Active') throw new BadRequestException('Pick an active person');
       data.ownerId = u.id;
     }
     await this.prisma.project.update({ where: { id }, data });
@@ -78,7 +91,7 @@ export class ProjectsController {
       data.value = Math.round(num(b.value, 'Value', { min: 0 })); data.pct = p.contract ? Math.round(data.value / p.contract * 1000) / 10 : 0;
     }
     if (b.due !== undefined && b.due !== d(m.due)) {
-      const org = await this.prisma.organization.findUniqueOrThrow({ where: { id: 'org' } });
+      const org = await this.prisma.organization.findUniqueOrThrow({ where: { id: orgId() } });
       if ((org.policy as any).msDates === false || p.ownerId === me.id) data.due = toDate(b.due);
       else { await this.move(me, id, mid, { due: b.due, reason: b.reason }); msg = `${m.name} saved. The new date is waiting on the project owner's approval.`; }
     }
@@ -118,9 +131,9 @@ export class ProjectsController {
     if (m.status !== 'COMPLETED') throw new BadRequestException('Complete the milestone before billing it');
     const { today } = await this.fin.ctx();
     const inv = await this.prisma.$transaction(async tx => {
-      const no = await this.numbering.next('INVOICE', tx);
+      const no = await this.numbering.next('INVOICE', { entityId: p.entityId }, tx);
       await tx.milestone.update({ where: { id: mid }, data: { status: 'INVOICED', changedAt: new Date() } });
-      return tx.invoice.create({ data: { no, customerId: p.customerId, title: `${p.name} — ${m.name}`, projectId: p.id, milestoneId: m.id, date: toDate(today),
+      return tx.invoice.create({ data: { no, entityId: p.entityId, customerId: p.customerId, title: `${p.name} — ${m.name}`, projectId: p.id, milestoneId: m.id, date: toDate(today),
         due: new Date(toDate(today).getTime() + p.customer.terms * 86400000), status: 'DRAFT', byId: me.id,
         lines: [{ d: `${p.name} — ${m.name} (${m.pct}%)`, qty: 1, unit: 'milestone', rate: m.value, disc: 0, sac: '998314' }] } });
     });
@@ -137,7 +150,7 @@ export class ProjectsController {
     if (!p || !m) throw new NotFoundException();
     const due = toDate(b.due);
     const fmt = (x: Date) => x.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', timeZone: 'UTC' });
-    const org = await this.prisma.organization.findUniqueOrThrow({ where: { id: 'org' } });
+    const org = await this.prisma.organization.findUniqueOrThrow({ where: { id: orgId() } });
     if ((org.policy as any).msDates === false || p.ownerId === me.id) {
       AccessService.require(me, 'project.update');
       await this.prisma.milestone.update({ where: { id: mid }, data: { due, changedAt: new Date() } });
@@ -162,7 +175,7 @@ export class AssetsController {
     const name = str(b.name, 'Name', { max: 200 }).trim(); if (!name) throw new BadRequestException('Name the asset.');
     const max = (await this.prisma.asset.findMany({ select: { code: true } })).map(a => +a.code.replace(/\D/g, '') || 0).reduce((a, x) => Math.max(a, x), 0);
     const code = str(b.code, 'Asset tag', { max: 30 }).trim().toUpperCase() || `AST-${String(max + 1).padStart(4, '0')}`;
-    if (await this.prisma.asset.findUnique({ where: { code } })) throw new BadRequestException(`${code} is already used`);
+    if (await this.prisma.asset.findFirst({ where: { code } })) throw new BadRequestException(`${code} is already used`);
     await this.prisma.asset.create({ data: { code, name, cat: str(b.cat || 'Other', 'Category', { max: 60 }), value: Math.round(num(b.value ?? 0, 'Value', { min: 0 })), status: 'AVAILABLE' } });
     await this.audit.log(me, `Added asset ${name} (${code})`, 'icon-laptop', 'settings');
     return { message: `${name} added as ${code}.` };

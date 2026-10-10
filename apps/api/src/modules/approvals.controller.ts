@@ -13,7 +13,7 @@ export class ApprovalsController {
   @Get() @Perm('approval.read')
   async list(@Me() me: AuthUser) {
     const rows = await this.prisma.approval.findMany({ where: { OR: [{ approverId: me.id }, { requestedById: me.id }] }, orderBy: { createdAt: 'desc' } });
-    const names = new Map((await this.prisma.user.findMany({ select: { id: true, name: true } })).map(u => [u.id, u.name]));
+    const names = new Map((await this.prisma.membership.findMany({ select: { id: true, name: true } })).map(u => [u.id, u.name]));
     return rows.map(a => ({
       id: a.id, kind: a.kind, docType: a.docType, docId: a.docId, ref: a.ref, title: a.title, detail: a.detail, amount: a.amount,
       by: names.get(a.requestedById) || '', approver: names.get(a.approverId) || '', age: relTime(a.createdAt),

@@ -2,6 +2,8 @@ import { BadRequestException, Body, Controller, HttpCode, Logger, Post } from '@
 import Anthropic from '@anthropic-ai/sdk';
 import { PERM_GROUPS, addDays, diffDays, fmtD, inr, permLabel } from '@bos/shared';
 import { PrismaService } from '../core/prisma.service';
+import { RedisService } from '../core/redis.service';
+import { orgId } from '../core/tenant';
 import { AccessService } from '../core/access.service';
 import { Me, Perm } from '../core/decorators';
 import type { AuthUser } from '../core/auth.types';
@@ -19,7 +21,10 @@ export class AiController {
   private log = new Logger('AI');
   private client: Anthropic | null = process.env.ANTHROPIC_API_KEY ? new Anthropic() : null;
 
-  constructor(private prisma: PrismaService, private fin: FinanceService) {}
+  constructor(private prisma: PrismaService, private fin: FinanceService, private redis: RedisService) {}
+
+  /** Counts assistant requests per organisation per month (Settings → Plan & billing → Usage). */
+  private count() { return this.redis.hit(`bos:${orgId()}:ai:${new Date().toISOString().slice(0, 7)}`, 40 * 86400); }
 
   private async data(me: AuthUser) {
     const c = await this.fin.ctx();
@@ -27,7 +32,7 @@ export class AiController {
       this.prisma.project.findMany({ include: { milestones: { orderBy: { seq: 'asc' } }, customer: true } }),
       this.prisma.task.findMany({ where: AccessService.has(me, 'task.read_all') ? {} : { OR: [{ assigneeId: me.id }, { reporterId: me.id }] } }),
       this.prisma.approval.findMany({ where: { approverId: me.id, status: 'PENDING' } }),
-      this.prisma.user.findMany(), this.prisma.invoice.findMany({ include: { customer: true } }), this.prisma.quote.findMany({ include: { customer: true } }),
+      this.prisma.membership.findMany(), this.prisma.invoice.findMany({ include: { customer: true } }), this.prisma.quote.findMany({ include: { customer: true } }),
       this.prisma.opportunity.findMany({ include: { customer: true } }), this.prisma.asset.findMany(), this.prisma.catalogItem.findMany(),
       this.prisma.role.findMany(), this.prisma.legacyMonth.findMany({ orderBy: { month: 'desc' }, take: 1 }),
     ]);
@@ -37,6 +42,7 @@ export class AiController {
 
   @Post('suggest') @HttpCode(200) @Perm('ai.use')
   async suggest(@Me() me: AuthUser, @Body() b: any): Promise<Reply> {
+    await this.count();
     const key = str(b.key, 'key', { required: true });
     const D = await this.data(me); const { c, name } = D; const today = c.today;
     const open = D.tasks.filter(t => t.status !== 'done');
@@ -145,6 +151,7 @@ export class AiController {
   /** Free-text question, answered by Claude from the records this person can see. */
   @Post('ask') @HttpCode(200) @Perm('ai.use')
   async ask(@Me() me: AuthUser, @Body() b: any): Promise<Reply> {
+    await this.count();
     const q = str(b.question, 'Question', { max: 1000 }).trim();
     if (!q) throw new BadRequestException('Ask a question');
     const fallback = { text: 'I can answer the suggested questions below. Free-text questions need an Anthropic API key — set ANTHROPIC_API_KEY on the API server.' };

@@ -37,8 +37,8 @@ export class MeetingsController {
   /** Emails a calendar invite (or cancellation) to attendees and outside guests, organiser excluded. */
   private async invite(m: MeetingRow, me: AuthUser, method: 'REQUEST' | 'CANCEL', only?: { userIds: string[]; guests: string[] }) {
     const { org, today } = await this.orgs.ctx();
-    const users = await this.prisma.user.findMany({ where: { id: { in: m.attendees.map(a => a.userId) } } });
-    const organizer = (await this.prisma.user.findUnique({ where: { id: m.organizerId } })) || { name: me.name, email: me.email };
+    const users = await this.prisma.membership.findMany({ where: { id: { in: m.attendees.map(a => a.userId) } } });
+    const organizer = (await this.prisma.membership.findUnique({ where: { id: m.organizerId } })) || { name: me.name, email: me.email };
     const everyone = [...users.map(u => ({ name: u.name, email: u.email })), ...m.guests.map(email => ({ email }))];
     // colleagues who disconnected their calendar on their profile don't get invite emails
     const cal = users.filter(u => u.calendar);

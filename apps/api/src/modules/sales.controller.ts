@@ -3,6 +3,7 @@ import type { Response } from 'express';
 import { DocumentsService, mailNote } from './documents.service';
 import { isValidGstin, STAGES, stateOf, UNISSUED } from '@bos/shared';
 import { PrismaService } from '../core/prisma.service';
+import { OrgService } from '../core/org.service';
 import { AccessService } from '../core/access.service';
 import { AuditService } from '../core/audit.service';
 import { Me, Perm } from '../core/decorators';
@@ -41,7 +42,7 @@ export class CustomersController {
     if (!name) throw new BadRequestException('Enter the business name.');
     const gstin = str(b.gstin, 'GSTIN', { max: 15 }).trim().toUpperCase();
     if (!isValidGstin(gstin)) throw new BadRequestException('Enter a valid 15-character GSTIN.');
-    if (await this.prisma.customer.findUnique({ where: { gstin } })) throw new BadRequestException('A customer with this GSTIN already exists.');
+    if (await this.prisma.customer.findFirst({ where: { gstin } })) throw new BadRequestException('A customer with this GSTIN already exists.');
     const email = str(b.email, 'Billing email', { max: 200 }).trim();
     if (email && !EMAIL.test(email)) throw new BadRequestException('Enter a valid billing email.');
     const { today } = await this.fin.ctx();
@@ -138,7 +139,7 @@ export class CatalogController {
     if (b.d !== undefined) data.d = str(b.d, 'Service', { max: 300 });
     if (b.unit !== undefined) data.unit = str(b.unit, 'Unit', { max: 30 });
     if (b.rate !== undefined) data.rate = Math.round(num(b.rate || 0, 'Rate', { min: 0 }));
-    if (b.sac !== undefined) { if (!(await this.prisma.sac.findUnique({ where: { code: String(b.sac) } }))) throw new BadRequestException('Unknown SAC code'); data.sac = String(b.sac); }
+    if (b.sac !== undefined) { if (!(await this.prisma.sac.findFirst({ where: { code: String(b.sac) } }))) throw new BadRequestException('Unknown SAC code'); data.sac = String(b.sac); }
     await this.prisma.catalogItem.update({ where: { id }, data });
     return { ok: true };
   }
@@ -149,7 +150,7 @@ export class CatalogController {
 
 @Controller('quotes')
 export class QuotesController {
-  constructor(private prisma: PrismaService, private fin: FinanceService, private audit: AuditService, private access: AccessService, private numbering: NumberingService, private docs: DocumentsService) {}
+  constructor(private prisma: PrismaService, private fin: FinanceService, private audit: AuditService, private access: AccessService, private numbering: NumberingService, private docs: DocumentsService, private orgs: OrgService) {}
 
   @Get(':id/pdf') @Perm('quote.read')
   async pdf(@Param('id') id: string, @Res() res: Response) {
@@ -180,10 +181,11 @@ export class QuotesController {
       const old = await this.one(b.id);
       if (!['DRAFT', 'SENT', 'DECLINED', 'APPROVED'].includes(old.status)) throw new BadRequestException('This quotation can no longer be changed');
       const revise = old.status !== 'DRAFT';
-      await this.prisma.quote.update({ where: { id: old.id }, data: { customerId: cust.id, title, lines, notes: str(b.notes, 'Notes'), validUntil: new Date(old.date.getTime() + days * 86400000), status: 'DRAFT', ver: revise ? old.ver + 1 : old.ver } });
+      await this.prisma.quote.update({ where: { id: old.id }, data: { customerId: cust.id, ...(b.entityId ? { entityId: (await this.orgs.entity(String(b.entityId))).id } : {}), title, lines, notes: str(b.notes, 'Notes'), validUntil: new Date(old.date.getTime() + days * 86400000), status: 'DRAFT', ver: revise ? old.ver + 1 : old.ver } });
       id = old.id; no = old.no;
     } else {
-      const q = await this.prisma.$transaction(async tx => tx.quote.create({ data: { no: await this.numbering.next('QUOTATION', tx), customerId: cust.id, title, date: toDate(today), validUntil: new Date(toDate(today).getTime() + days * 86400000), status: 'DRAFT', byId: me.id, lines, notes: str(b.notes, 'Notes') } }));
+      const entityId = (await this.orgs.entity(b.entityId || null)).id;
+      const q = await this.prisma.$transaction(async tx => tx.quote.create({ data: { no: await this.numbering.next('QUOTATION', {}, tx), entityId, customerId: cust.id, title, date: toDate(today), validUntil: new Date(toDate(today).getTime() + days * 86400000), status: 'DRAFT', byId: me.id, lines, notes: str(b.notes, 'Notes') } }));
       id = q.id; no = q.no;
       await this.audit.log(me, `${me.name} drafted ${no}`, 'icon-scroll-text', 'quote');
     }
@@ -221,11 +223,12 @@ export class QuotesController {
   private async toProject(me: AuthUser, q: Awaited<ReturnType<QuotesController['one']>>) {
     AccessService.require(me, 'quote.convert'); AccessService.require(me, 'project.create');
     if (q.status !== 'ACCEPTED') throw new BadRequestException('Only an accepted quotation can be converted');
-    const c = await this.fin.ctx(); const k = this.fin.calcFor(q.lines, q.customerId, c);
+    const c = await this.fin.ctx(); const k = this.fin.calcFor(q.lines, q.customerId, c, q.entityId);
     const { today } = c; const at = (days: number) => new Date(toDate(today).getTime() + days * 86400000);
     const p = await this.prisma.$transaction(async tx => {
-      const code = await this.numbering.next('PROJECT', tx);
-      const p = await tx.project.create({ data: { name: q.title, code, customerId: q.customerId, bu: k.rows.some(r => r.sac === '998319') ? 'Cybersecurity' : 'Software', contract: k.taxable,
+      const code = await this.numbering.next('PROJECT', {}, tx);
+      const unit = await tx.businessUnit.findFirst({ where: { entityId: q.entityId, name: k.rows.some(r => r.sac === '998319') ? 'Cybersecurity' : 'Software' } });
+      const p = await tx.project.create({ data: { name: q.title, code, customerId: q.customerId, entityId: q.entityId, unitId: unit?.id ?? null, contract: k.taxable,
         endDate: at(14 * k.rows.length), ownerId: me.id, quoteId: q.id,
         milestones: { create: k.rows.map((r, i) => ({ seq: i + 1, name: r.d, pct: Math.round(r.taxable / (k.taxable || 1) * 1000) / 10, value: r.taxable, status: i === 0 ? 'IN_PROGRESS' : 'PENDING', due: at(14 * (i + 1)) })) } } });
       await tx.quote.update({ where: { id: q.id }, data: { status: 'CONVERTED', projectId: p.id } });
@@ -240,8 +243,8 @@ export class QuotesController {
     if (q.status !== 'ACCEPTED') throw new BadRequestException('Only an accepted quotation can be converted');
     const { today } = await this.fin.ctx();
     const inv = await this.prisma.$transaction(async tx => {
-      const no = await this.numbering.next('INVOICE', tx);
-      const inv = await tx.invoice.create({ data: { no, customerId: q.customerId, title: q.title, date: toDate(today), due: new Date(toDate(today).getTime() + q.customer.terms * 86400000), status: 'DRAFT', byId: me.id, lines: q.lines as any, notes: `Against quotation ${q.no}.` } });
+      const no = await this.numbering.next('INVOICE', { entityId: q.entityId }, tx);
+      const inv = await tx.invoice.create({ data: { no, entityId: q.entityId, customerId: q.customerId, title: q.title, date: toDate(today), due: new Date(toDate(today).getTime() + q.customer.terms * 86400000), status: 'DRAFT', byId: me.id, lines: q.lines as any, notes: `Against quotation ${q.no}.` } });
       await tx.quote.update({ where: { id: q.id }, data: { status: 'CONVERTED', invoiceId: inv.id } });
       return inv;
     });

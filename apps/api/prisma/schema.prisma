@@ -1,34 +1,90 @@
-// Business OS data model. One organisation per deployment; every table is scoped to it.
+// Business OS data model. Multi-tenant: every tenant table carries orgId, filled from the
+// transaction's app.org_id setting and enforced by Postgres row-level security (see the
+// tenant_rls migration). Organization and Account are the only global tables.
 
 generator client {
-  provider = "prisma-client-js"
+  provider      = "prisma-client-js"
   binaryTargets = ["native", "linux-musl-openssl-3.0.x", "debian-openssl-3.0.x"]
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL") // the app: role bos_app, no BYPASSRLS
+  directUrl = env("MIGRATE_DATABASE_URL") // migrations and seed: the owner role
 }
 
 model Organization {
-  id        String   @id @default("org")
-  slug      String   @unique
-  name      String
-  currency  String   @default("INR")
-  tz        String   @default("Asia/Kolkata")
-  country   String   @default("IN")
-  fyStart   String   @default("April")
-  dateFmt   String   @default("8 Oct 2026")
-  modules   Json     // { crm: true, ... }
-  security  Json
-  policy    Json
-  taxOpts   Json
-  reminders Json
-  templates Json
-  createdAt DateTime @default(now())
+  id           String    @id @default(cuid())
+  slug         String    @unique // acme → acme.bos.app
+  name         String
+  plan         String    @default("trial") // trial | starter | growth | enterprise
+  status       String    @default("active") // active | suspended | closed
+  region       String    @default("ap-south-1")
+  trialEndsAt  DateTime?
+  closedAt     DateTime?
+  demo         Boolean   @default(false) // sample workspace: allows "Approve as … (demo)" actions
+  setupDone    Boolean   @default(true) // false shows the Get started checklist
+  billingEmail String    @default("")
+  billEntityId String?
+  currency     String    @default("INR")
+  tz           String    @default("Asia/Kolkata")
+  country      String    @default("IN")
+  fyStart      String    @default("April")
+  dateFmt      String    @default("8 Oct 2026")
+  modules      Json // { crm: true, ... }
+  security     Json
+  policy       Json
+  taxOpts      Json
+  reminders    Json
+  templates    Json
+  createdAt    DateTime  @default(now())
+
+  memberships   Membership[]
+  entities      LegalEntity[]
+  units         BusinessUnit[]
+  roles         Role[]
+  customers     Customer[]
+  sacs          Sac[]
+  catalog       CatalogItem[]
+  series        Series[]
+  projects      Project[]
+  milestones    Milestone[]
+  tasks         Task[]
+  taskEvents    TaskEvent[]
+  timeBlocks    TimeBlock[]
+  meetings      Meeting[]
+  attendees     MeetingAttendee[]
+  actionItems   ActionItem[]
+  quotes        Quote[]
+  invoices      Invoice[]
+  payments      Payment[]
+  allocations   PaymentAllocation[]
+  creditNotes   CreditNote[]
+  assets        Asset[]
+  approvals     Approval[]
+  opportunities Opportunity[]
+  audit         AuditLog[]
+  notifications Notification[]
+  legacyMonths  LegacyMonth[]
+  emails        EmailLog[]
+  exports       DataExport[]
+}
+
+/// The human: one sign-in across every organisation they belong to.
+model Account {
+  id           String       @id @default(cuid())
+  email        String       @unique
+  name         String
+  passwordHash String?
+  mfaSecret    String?
+  lastOrgId    String?
+  createdAt    DateTime     @default(now())
+  memberships  Membership[]
 }
 
 model LegalEntity {
+  orgId     String         @default(dbgenerated("current_setting('app.org_id'::text, true)"))
+  org       Organization   @relation(fields: [orgId], references: [id], onDelete: Cascade)
   id        String         @id @default(cuid())
   name      String
   gstin     String
@@ -39,185 +95,265 @@ model LegalEntity {
   upi       String
   isDefault Boolean        @default(false)
   units     BusinessUnit[]
+
+  series   Series[]
+  projects Project[]
+  quotes   Quote[]
+  invoices Invoice[]
+  payments Payment[]
+  credits  CreditNote[]
+
+  @@index([orgId])
 }
 
 model BusinessUnit {
-  id       String      @id @default(cuid())
-  name     String      @unique
+  orgId    String       @default(dbgenerated("current_setting('app.org_id'::text, true)"))
+  org      Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  id       String       @id @default(cuid())
+  name     String
   code     String
   entityId String
-  entity   LegalEntity @relation(fields: [entityId], references: [id])
+  entity   LegalEntity  @relation(fields: [entityId], references: [id])
   headId   String?
-  head     User?       @relation("UnitHead", fields: [headId], references: [id])
+  head     Membership?  @relation("UnitHead", fields: [headId], references: [id])
+
+  projects Project[]
+
+  @@unique([orgId, name])
+  @@index([orgId])
 }
 
 model Role {
-  id      String   @id @default(cuid())
-  name    String   @unique
+  orgId   String       @default(dbgenerated("current_setting('app.org_id'::text, true)"))
+  org     Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  id      String       @id @default(cuid())
+  name    String
   desc    String
-  builtIn Boolean  @default(false)
+  builtIn Boolean      @default(false)
   perms   String[]
-  sort    Int      @default(100)
-  users   User[]
+  sort    Int          @default(100)
+  users   Membership[]
+
+  @@unique([orgId, name])
+  @@index([orgId])
 }
 
-model User {
-  id           String    @id @default(cuid())
-  email        String    @unique
+/// A person's place in one organisation (role, access scope, profile). Name and email are
+/// copies of the Account's, kept so lists and documents don't need a join.
+model Membership {
+  orgId        String       @default(dbgenerated("current_setting('app.org_id'::text, true)"))
+  org          Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  id           String       @id @default(cuid())
+  accountId    String
+  account      Account      @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  email        String
   name         String
-  title        String    @default("")
+  scope        Json         @default("{\"all\": true}") // { all } | { entityIds: [] } | { unitIds: [] }
+  title        String       @default("")
   roleId       String
-  role         Role      @relation(fields: [roleId], references: [id])
-  status       String    @default("Active") // Active | Invited | Deactivated
-  passwordHash String?
-  inviteToken  String?   @unique
+  role         Role         @relation(fields: [roleId], references: [id])
+  status       String       @default("Active") // Active | Invited | Deactivated
+  inviteToken  String?      @unique
   inviteExpiry DateTime?
   lastActiveAt DateTime?
-  createdAt    DateTime  @default(now())
+  createdAt    DateTime     @default(now())
   // Team directory and profile
-  dept         String    @default("")
+  dept         String       @default("")
   managerId    String?
-  manager      User?     @relation("Reports", fields: [managerId], references: [id], onDelete: SetNull)
-  reports      User[]    @relation("Reports")
-  phone        String    @default("")
-  location     String    @default("")
-  hours        String    @default("9:30 am – 6:30 pm")
+  manager      Membership?  @relation("Reports", fields: [managerId], references: [id], onDelete: SetNull)
+  reports      Membership[] @relation("Reports")
+  phone        String       @default("")
+  location     String       @default("")
+  hours        String       @default("9:30 am – 6:30 pm")
   joinedAt     DateTime?
-  leaveUntil   DateTime? @db.Date
-  calendar     Boolean   @default(true) // receive meeting invites as calendar events
-  prefs        Json      @default("{\"remind\": true, \"mention\": true, \"digest\": true}")
+  leaveUntil   DateTime?    @db.Date
+  calendar     Boolean      @default(true) // receive meeting invites as calendar events
+  prefs        Json         @default("{\"remind\": true, \"mention\": true, \"digest\": true}")
 
-  unitsHeaded     BusinessUnit[] @relation("UnitHead")
-  customersOwned  Customer[]
-  projectsOwned   Project[]
-  tasksAssigned   Task[]         @relation("TaskAssignee")
-  tasksReported   Task[]         @relation("TaskReporter")
-  taskEvents      TaskEvent[]
-  meetings        MeetingAttendee[]
-  notifications   Notification[]
+  unitsHeaded    BusinessUnit[]    @relation("UnitHead")
+  customersOwned Customer[]
+  projectsOwned  Project[]
+  tasksAssigned  Task[]            @relation("TaskAssignee")
+  tasksReported  Task[]            @relation("TaskReporter")
+  taskEvents     TaskEvent[]
+  meetings       MeetingAttendee[]
+  notifications  Notification[]
+
+  @@unique([orgId, accountId])
+  @@unique([orgId, email])
+  @@index([orgId])
 }
 
 model Customer {
-  id       String    @id @default(cuid())
+  orgId    String        @default(dbgenerated("current_setting('app.org_id'::text, true)"))
+  org      Organization  @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  id       String        @id @default(cuid())
   name     String
-  gstin    String    @unique
+  gstin    String
   city     String
   contact  String
   email    String
   phone    String
-  terms    Int       @default(30)
+  terms    Int           @default(30)
   ownerId  String
-  owner    User      @relation(fields: [ownerId], references: [id])
-  since    DateTime  @db.Date
-  archived Boolean   @default(false)
+  owner    Membership    @relation(fields: [ownerId], references: [id])
+  since    DateTime      @db.Date
+  archived Boolean       @default(false)
   projects Project[]
   quotes   Quote[]
   invoices Invoice[]
   payments Payment[]
   opps     Opportunity[]
+
+  @@unique([orgId, gstin])
+  @@index([orgId])
 }
 
 model Sac {
-  code String @id
-  desc String
-  rate Int
+  orgId String       @default(dbgenerated("current_setting('app.org_id'::text, true)"))
+  org   Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  code  String
+  desc  String
+  rate  Int
+
+  @@id([orgId, code])
+  @@index([orgId])
 }
 
 model CatalogItem {
-  id   String @id @default(cuid())
-  d    String
-  sac  String
-  unit String
-  rate Int
-  sort Int    @default(0)
+  orgId String       @default(dbgenerated("current_setting('app.org_id'::text, true)"))
+  org   Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  id    String       @id @default(cuid())
+  d     String
+  sac   String
+  unit  String
+  rate  Int
+  sort  Int          @default(0)
+
+  @@index([orgId])
 }
 
 model Series {
-  type    String @id // INVOICE | QUOTATION | CREDIT_NOTE | RECEIPT | PROJECT
-  label   String
-  prefix  String
-  pattern String
-  padding Int
-  next    Int
-  reset   String
+  orgId    String       @default(dbgenerated("current_setting('app.org_id'::text, true)"))
+  org      Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  id       String       @id @default(cuid())
+  entityId String? // null = org-wide (quotations, projects); invoices, credit notes and receipts are per GSTIN
+  entity   LegalEntity? @relation(fields: [entityId], references: [id], onDelete: Cascade)
+  type     String // INVOICE | QUOTATION | CREDIT_NOTE | RECEIPT | PROJECT
+  label    String
+  prefix   String
+  pattern  String
+  padding  Int
+  next     Int
+  reset    String
+
+  @@unique([orgId, entityId, type])
+  @@index([orgId])
 }
 
 model Project {
-  id         String      @id @default(cuid())
+  orgId      String        @default(dbgenerated("current_setting('app.org_id'::text, true)"))
+  org        Organization  @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  id         String        @id @default(cuid())
   name       String
-  code       String      @unique
+  code       String
   customerId String
-  customer   Customer    @relation(fields: [customerId], references: [id])
-  bu         String
+  customer   Customer      @relation(fields: [customerId], references: [id])
+  entityId   String
+  entity     LegalEntity   @relation(fields: [entityId], references: [id])
+  unitId     String?
+  unit       BusinessUnit? @relation(fields: [unitId], references: [id], onDelete: SetNull)
   contract   Int
-  endDate    DateTime    @db.Date
-  health     String      @default("On track")
-  status     String      @default("ACTIVE")
+  endDate    DateTime      @db.Date
+  health     String        @default("On track")
+  status     String        @default("ACTIVE")
   ownerId    String
-  owner      User        @relation(fields: [ownerId], references: [id])
+  owner      Membership    @relation(fields: [ownerId], references: [id])
   quoteId    String?
-  createdAt  DateTime    @default(now())
+  createdAt  DateTime      @default(now())
   milestones Milestone[]
   tasks      Task[]
   meetings   Meeting[]
   invoices   Invoice[]
   assets     Asset[]
+
+  @@unique([orgId, code])
+  @@index([orgId])
 }
 
 model Milestone {
-  id        String    @id @default(cuid())
+  orgId     String       @default(dbgenerated("current_setting('app.org_id'::text, true)"))
+  org       Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  id        String       @id @default(cuid())
   projectId String
-  project   Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  project   Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
   seq       Int
   name      String
   pct       Float
   value     Int
-  status    String    @default("PENDING")
-  due       DateTime  @db.Date
+  status    String       @default("PENDING")
+  due       DateTime     @db.Date
   changedAt DateTime?
+
+  @@index([orgId])
 }
 
 model Task {
-  id          String      @id @default(cuid())
-  key         Int         @unique
-  title       String
-  desc        String      @default("")
-  projectId   String
-  project     Project     @relation(fields: [projectId], references: [id])
-  assigneeId  String
-  assignee    User        @relation("TaskAssignee", fields: [assigneeId], references: [id])
-  reporterId  String
-  reporter    User        @relation("TaskReporter", fields: [reporterId], references: [id])
-  due         DateTime    @db.Date
-  status      String      @default("todo")
-  priority    String      @default("Medium")
-  createdAt   DateTime    @default(now())
-  events      TaskEvent[]
-  blocks      TimeBlock[]
+  orgId      String       @default(dbgenerated("current_setting('app.org_id'::text, true)"))
+  org        Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  id         String       @id @default(cuid())
+  key        Int
+  title      String
+  desc       String       @default("")
+  projectId  String
+  project    Project      @relation(fields: [projectId], references: [id])
+  assigneeId String
+  assignee   Membership   @relation("TaskAssignee", fields: [assigneeId], references: [id])
+  reporterId String
+  reporter   Membership   @relation("TaskReporter", fields: [reporterId], references: [id])
+  due        DateTime     @db.Date
+  status     String       @default("todo")
+  priority   String       @default("Medium")
+  createdAt  DateTime     @default(now())
+  events     TaskEvent[]
+  blocks     TimeBlock[]
+
+  @@unique([orgId, key])
+  @@index([orgId])
 }
 
 model TaskEvent {
-  id        String   @id @default(cuid())
+  orgId     String       @default(dbgenerated("current_setting('app.org_id'::text, true)"))
+  org       Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  id        String       @id @default(cuid())
   taskId    String
-  task      Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  task      Task         @relation(fields: [taskId], references: [id], onDelete: Cascade)
   userId    String
-  user      User     @relation(fields: [userId], references: [id])
-  kind      String   // comment | sys
+  user      Membership   @relation(fields: [userId], references: [id])
+  kind      String // comment | sys
   text      String
-  createdAt DateTime @default(now())
+  createdAt DateTime     @default(now())
+
+  @@index([orgId])
 }
 
 model TimeBlock {
-  id     String   @id @default(cuid())
+  orgId  String       @default(dbgenerated("current_setting('app.org_id'::text, true)"))
+  org    Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  id     String       @id @default(cuid())
   taskId String
-  task   Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  task   Task         @relation(fields: [taskId], references: [id], onDelete: Cascade)
   userId String
-  date   DateTime @db.Date
+  date   DateTime     @db.Date
   start  Float
   dur    Float
+
+  @@index([orgId])
 }
 
 model Meeting {
+  orgId       String            @default(dbgenerated("current_setting('app.org_id'::text, true)"))
+  org         Organization      @relation(fields: [orgId], references: [id], onDelete: Cascade)
   id          String            @id @default(cuid())
   title       String
   date        DateTime          @db.Date
@@ -235,48 +371,69 @@ model Meeting {
   sequence    Int               @default(0)
   attendees   MeetingAttendee[]
   actions     ActionItem[]
+
+  @@index([orgId])
 }
 
 model MeetingAttendee {
+  orgId     String       @default(dbgenerated("current_setting('app.org_id'::text, true)"))
+  org       Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
   meetingId String
-  meeting   Meeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  meeting   Meeting      @relation(fields: [meetingId], references: [id], onDelete: Cascade)
   userId    String
-  user      User    @relation(fields: [userId], references: [id])
+  user      Membership   @relation(fields: [userId], references: [id])
+
   @@id([meetingId, userId])
+  @@index([orgId])
 }
 
 model ActionItem {
-  id         String  @id @default(cuid())
+  orgId      String       @default(dbgenerated("current_setting('app.org_id'::text, true)"))
+  org        Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  id         String       @id @default(cuid())
   meetingId  String
-  meeting    Meeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  meeting    Meeting      @relation(fields: [meetingId], references: [id], onDelete: Cascade)
   text       String
   assigneeId String
   taskId     String?
-  sort       Int     @default(0)
+  sort       Int          @default(0)
+
+  @@index([orgId])
 }
 
 model Quote {
-  id         String   @id @default(cuid())
-  no         String   @unique
+  orgId      String       @default(dbgenerated("current_setting('app.org_id'::text, true)"))
+  org        Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  id         String       @id @default(cuid())
+  entityId   String
+  entity     LegalEntity  @relation(fields: [entityId], references: [id])
+  no         String
   customerId String
-  customer   Customer @relation(fields: [customerId], references: [id])
+  customer   Customer     @relation(fields: [customerId], references: [id])
   title      String
-  date       DateTime @db.Date
-  validUntil DateTime @db.Date
-  status     String   @default("DRAFT")
+  date       DateTime     @db.Date
+  validUntil DateTime     @db.Date
+  status     String       @default("DRAFT")
   byId       String
-  ver        Int      @default(1)
+  ver        Int          @default(1)
   lines      Json
-  notes      String   @default("")
+  notes      String       @default("")
   rejected   String?
   projectId  String?
   invoiceId  String?
-  createdAt  DateTime @default(now())
+  createdAt  DateTime     @default(now())
+
+  @@unique([orgId, no])
+  @@index([orgId])
 }
 
 model Invoice {
+  orgId       String              @default(dbgenerated("current_setting('app.org_id'::text, true)"))
+  org         Organization        @relation(fields: [orgId], references: [id], onDelete: Cascade)
   id          String              @id @default(cuid())
-  no          String              @unique
+  entityId    String
+  entity      LegalEntity         @relation(fields: [entityId], references: [id])
+  no          String
   customerId  String
   customer    Customer            @relation(fields: [customerId], references: [id])
   title       String
@@ -293,11 +450,18 @@ model Invoice {
   createdAt   DateTime            @default(now())
   allocations PaymentAllocation[]
   credits     CreditNote[]
+
+  @@unique([entityId, no])
+  @@index([orgId])
 }
 
 model Payment {
+  orgId       String              @default(dbgenerated("current_setting('app.org_id'::text, true)"))
+  org         Organization        @relation(fields: [orgId], references: [id], onDelete: Cascade)
   id          String              @id @default(cuid())
-  no          String              @unique
+  entityId    String
+  entity      LegalEntity         @relation(fields: [entityId], references: [id])
+  no          String
   customerId  String
   customer    Customer            @relation(fields: [customerId], references: [id])
   date        DateTime            @db.Date
@@ -305,44 +469,65 @@ model Payment {
   ref         String
   createdById String
   allocations PaymentAllocation[]
+
+  @@unique([entityId, no])
+  @@index([orgId])
 }
 
 model PaymentAllocation {
-  id        String  @id @default(cuid())
+  orgId     String       @default(dbgenerated("current_setting('app.org_id'::text, true)"))
+  org       Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  id        String       @id @default(cuid())
   paymentId String
-  payment   Payment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  payment   Payment      @relation(fields: [paymentId], references: [id], onDelete: Cascade)
   invoiceId String
-  invoice   Invoice @relation(fields: [invoiceId], references: [id])
+  invoice   Invoice      @relation(fields: [invoiceId], references: [id])
   amount    Int
+
+  @@index([orgId])
 }
 
 model CreditNote {
-  id        String   @id @default(cuid())
-  no        String   @unique
+  orgId     String       @default(dbgenerated("current_setting('app.org_id'::text, true)"))
+  org       Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  id        String       @id @default(cuid())
+  entityId  String
+  entity    LegalEntity  @relation(fields: [entityId], references: [id])
+  no        String
   invoiceId String
-  invoice   Invoice  @relation(fields: [invoiceId], references: [id])
-  date      DateTime @db.Date
+  invoice   Invoice      @relation(fields: [invoiceId], references: [id])
+  date      DateTime     @db.Date
   taxable   Int
   total     Int
   reason    String
+
+  @@unique([entityId, no])
+  @@index([orgId])
 }
 
 model Asset {
-  id        String   @id @default(cuid())
-  code      String   @unique
+  orgId     String       @default(dbgenerated("current_setting('app.org_id'::text, true)"))
+  org       Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  id        String       @id @default(cuid())
+  code      String
   name      String
   cat       String
   holderId  String?
   projectId String?
-  project   Project? @relation(fields: [projectId], references: [id])
-  status    String   @default("AVAILABLE")
+  project   Project?     @relation(fields: [projectId], references: [id])
+  status    String       @default("AVAILABLE")
   value     Int
+
+  @@unique([orgId, code])
+  @@index([orgId])
 }
 
 model Approval {
-  id            String    @id @default(cuid())
-  kind          String    // Invoice | Quotation | Milestone date | Asset request
-  docType       String?   // invoice | quote
+  orgId         String       @default(dbgenerated("current_setting('app.org_id'::text, true)"))
+  org           Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  id            String       @id @default(cuid())
+  kind          String // Invoice | Quotation | Milestone date | Asset request
+  docType       String? // invoice | quote
   docId         String?
   ref           String
   title         String
@@ -351,59 +536,98 @@ model Approval {
   payload       Json?
   requestedById String
   approverId    String
-  status        String    @default("PENDING") // PENDING | APPROVED | REJECTED
-  createdAt     DateTime  @default(now())
+  status        String       @default("PENDING") // PENDING | APPROVED | REJECTED
+  createdAt     DateTime     @default(now())
   decidedAt     DateTime?
+
+  @@index([orgId])
 }
 
 model Opportunity {
-  id         String   @id @default(cuid())
+  orgId      String       @default(dbgenerated("current_setting('app.org_id'::text, true)"))
+  org        Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  id         String       @id @default(cuid())
   name       String
   customerId String
-  customer   Customer @relation(fields: [customerId], references: [id])
+  customer   Customer     @relation(fields: [customerId], references: [id])
   value      Int
   ownerId    String
   stage      Int
   next       String
+
+  @@index([orgId])
 }
 
 model AuditLog {
-  id        String   @id @default(cuid())
+  orgId     String       @default(dbgenerated("current_setting('app.org_id'::text, true)"))
+  org       Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  id        String       @id @default(cuid())
   icon      String
   text      String
-  area      String   // invoice | quote | payment | access | settings
+  area      String // invoice | quote | payment | access | settings
   userId    String?
   who       String
-  createdAt DateTime @default(now())
+  createdAt DateTime     @default(now())
+
+  @@index([orgId])
 }
 
 model Notification {
-  id        String   @id @default(cuid())
+  orgId     String       @default(dbgenerated("current_setting('app.org_id'::text, true)"))
+  org       Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  id        String       @id @default(cuid())
   userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user      Membership   @relation(fields: [userId], references: [id], onDelete: Cascade)
   icon      String
   text      String
   link      String?
-  read      Boolean  @default(false)
-  createdAt DateTime @default(now())
+  read      Boolean      @default(false)
+  createdAt DateTime     @default(now())
+
+  @@index([orgId])
 }
 
 /// Monthly totals imported from the previous system, so reports cover the months before go-live.
 model LegacyMonth {
-  month     String @id // YYYY-MM
+  orgId     String       @default(dbgenerated("current_setting('app.org_id'::text, true)"))
+  org       Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  month     String // YYYY-MM
   invoiced  Int
   collected Int
+
+  @@id([orgId, month])
+  @@index([orgId])
 }
 
 /// Every email the system sends, with its delivery result.
 model EmailLog {
-  id        String   @id @default(cuid())
+  orgId     String       @default(dbgenerated("current_setting('app.org_id'::text, true)"))
+  org       Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  id        String       @id @default(cuid())
   to        String
   subject   String
-  kind      String   // quote | invoice | reminder | invite | welcome | meeting | test
+  kind      String // quote | invoice | reminder | invite | welcome | meeting | test
   ref       String?
-  status    String   // sent | failed
+  status    String // sent | failed
   error     String?
   userId    String?
-  createdAt DateTime @default(now())
+  createdAt DateTime     @default(now())
+
+  @@index([orgId])
+}
+
+/// A full data export (CSV + JSON + issued PDFs as a ZIP), downloadable through a signed link for 7 days.
+model DataExport {
+  orgId         String       @default(dbgenerated("current_setting('app.org_id'::text, true)"))
+  org           Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  id            String       @id @default(cuid())
+  requestedById String
+  status        String       @default("Preparing") // Preparing | Ready | Failed
+  path          String?
+  size          Int?
+  error         String?
+  expiresAt     DateTime
+  createdAt     DateTime     @default(now())
+
+  @@index([orgId])
 }
