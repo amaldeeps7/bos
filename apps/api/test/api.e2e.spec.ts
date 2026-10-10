@@ -27,7 +27,8 @@ beforeAll(async () => {
   // the whole suite comes from one address.
   process.env.RATE_LIMIT_PER_MIN = '100000';
   app = configureApp(mod.createNestApplication<NestExpressApplication>());
-  await app.get(RedisService).delPattern('bos:rl:*');
+  // Counters from earlier runs (rate limits, password-reset requests) would otherwise carry over.
+  for (const k of ['bos:rl:*', 'bos:forgot:*', 'bos:mfa:*']) await app.get(RedisService).delPattern(k);
   await app.init();
 }, 60000);
 afterAll(async () => { await app?.close(); await db.$disconnect(); });
@@ -972,5 +973,74 @@ describe('notifications', () => {
     expect(p2.rows.length).toBeGreaterThan(0); expect(p2.rows.some((r: any) => p1.rows.some((x: any) => x.id === r.id))).toBe(false);
     const unread = (await http().get('/api/notifications/all?unread=1').set('Cookie', rohan)).body;
     expect(unread.rows.every((r: any) => !r.read)).toBe(true);
+  });
+});
+
+describe('lists: bulk changes, history, report periods', () => {
+  const http = () => request(app.getHttpServer());
+
+  it('changes several tasks at once, with the same checks as one at a time', async () => {
+    // Sara (Field staff): Arjun's account is deleted by an earlier test.
+    const pm = await login('priya@democonsulting.in'); const field = await login('sara@democonsulting.in');
+    const project = (await http().get('/api/projects').set('Cookie', pm)).body[0];
+    const mk = async (title: string) => (await http().post('/api/tasks').set('Cookie', pm).send({ title, projectId: project.id, due: '2026-12-01' }).expect(201)).body.id;
+    const ids = [await mk('Bulk A'), await mk('Bulk B'), await mk('Bulk C')];
+    await http().post('/api/tasks/bulk').set('Cookie', pm).send({ ids: [] }).expect(400);
+    await http().post('/api/tasks/bulk').set('Cookie', pm).send({ ids }).expect(400); // nothing to change
+    const r = await http().post('/api/tasks/bulk').set('Cookie', pm).send({ ids, status: 'doing', priority: 'High', due: '2026-12-15' }).expect(200);
+    expect(r.body).toMatchObject({ done: 3, skipped: 0 });
+    const after = (await http().get('/api/tasks').set('Cookie', pm)).body.filter((t: any) => ids.includes(t.id));
+    expect(after.every((t: any) => t.status === 'doing' && t.priority === 'High' && t.due === '2026-12-15')).toBe(true);
+    // Field staff can't see Priya's tasks, so nothing of theirs changes.
+    const f = await http().post('/api/tasks/bulk').set('Cookie', field).send({ ids, status: 'done' }).expect(200);
+    expect(f.body).toMatchObject({ done: 0, skipped: 3 });
+    const del = await http().post('/api/tasks/bulk').set('Cookie', pm).send({ ids, delete: true }).expect(200);
+    expect(del.body.done).toBe(3);
+  });
+
+  it('keeps long-finished tasks out of the everyday list but pages them in, and opens one on its own', async () => {
+    const pm = await login('priya@democonsulting.in');
+    const project = (await http().get('/api/projects').set('Cookie', pm)).body[0];
+    const t = (await http().post('/api/tasks').set('Cookie', pm).send({ title: 'Old finished thing', projectId: project.id, due: '2026-01-10' }).expect(201)).body;
+    await http().patch(`/api/tasks/${t.id}`).set('Cookie', pm).send({ status: 'done' }).expect(200);
+    expect((await db.task.findUniqueOrThrow({ where: { id: t.id } })).doneAt).toBeTruthy();
+    await db.task.update({ where: { id: t.id }, data: { doneAt: new Date(Date.now() - 45 * 86400_000) } });
+    expect((await http().get('/api/tasks').set('Cookie', pm)).body.some((x: any) => x.id === t.id)).toBe(false);
+    const h = (await http().get('/api/tasks/history?q=old finished').set('Cookie', pm).expect(200)).body;
+    expect(h.rows.map((x: any) => x.id)).toContain(t.id);
+    expect((await http().get(`/api/tasks/${t.id}`).set('Cookie', pm).expect(200)).body.title).toBe('Old finished thing');
+    await http().patch(`/api/tasks/${t.id}`).set('Cookie', pm).send({ status: 'todo' }).expect(200);
+    expect((await db.task.findUniqueOrThrow({ where: { id: t.id } })).doneAt).toBeNull(); // reopened
+  });
+
+  it('approves several at once', async () => {
+    // Whoever the seeded approvals are waiting on.
+    const pending = await db.approval.findFirstOrThrow({ where: { orgId: 'org_7f3k2q9xw1', status: 'PENDING' } });
+    const owner = await login((await db.membership.findUniqueOrThrow({ where: { id: pending.approverId } })).email);
+    const waiting = (await http().get('/api/approvals').set('Cookie', owner)).body.filter((a: any) => a.status === 'waiting');
+    expect(waiting.length).toBeGreaterThan(0);
+    const r = await http().post('/api/approvals/bulk').set('Cookie', owner).send({ ids: waiting.map((a: any) => a.id), approve: true }).expect(200);
+    expect(r.body.done + r.body.skipped).toBe(waiting.length);
+    expect((await http().get('/api/approvals').set('Cookie', owner)).body.filter((a: any) => a.status === 'waiting').length).toBe(r.body.skipped);
+  });
+
+  it('reports on a chosen period', async () => {
+    const owner = await login('anand@democonsulting.in');
+    const def = (await http().get('/api/reports').set('Cookie', owner).expect(200)).body;
+    expect(def.months).toHaveLength(6);
+    const fy = (await http().get('/api/reports?from=2026-04&to=2026-10').set('Cookie', owner).expect(200)).body;
+    expect(fy.months.map((m: any) => m.month)).toEqual(['2026-04', '2026-05', '2026-06', '2026-07', '2026-08', '2026-09', '2026-10']);
+    expect(fy.period).toBe('April 2026 to October 2026');
+    const long = (await http().get('/api/reports?from=2020-01&to=2026-10').set('Cookie', owner).expect(200)).body;
+    expect(long.months).toHaveLength(24); // capped
+    await http().get('/api/reports?from=2026-10&to=2026-04').set('Cookie', owner).expect(400);
+  });
+
+  it('keeps old meetings out of the everyday list but pages them in', async () => {
+    const pm = await login('priya@democonsulting.in');
+    const m = (await http().post('/api/meetings').set('Cookie', pm).send({ title: 'Ancient sync', date: '2025-01-15', start: 10, dur: 0.5, loc: 'Google Meet', attendees: [] }).expect(201)).body;
+    expect((await http().get('/api/meetings').set('Cookie', pm)).body.some((x: any) => x.id === m.id)).toBe(false);
+    const past = (await http().get('/api/meetings/past').set('Cookie', pm).expect(200)).body;
+    expect(past.rows.some((x: any) => x.id === m.id)).toBe(true);
   });
 });

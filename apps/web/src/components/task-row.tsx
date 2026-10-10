@@ -38,13 +38,14 @@ export function FocusRow({ t, p }: { t: Task; p?: Project }) {
 }
 
 /** The full row on the Tasks screen. */
-export function TaskListRow({ t, p }: { t: Task; p?: Project }) {
+export function TaskListRow({ t, p, select }: { t: Task; p?: Project; select?: { on: boolean; toggle: () => void } }) {
   const { today, person } = useApp(); const router = useRouter(); const a = useTaskActions();
   const done = t.status === 'done'; const d = dueInfo(t, today); const st = TASK_STATUS[t.status];
   const who = person(t.assigneeId); const comments = t.events.filter(e => e.kind === 'comment').length;
   return (
     <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px 16px', padding: '12px 20px', borderBottom: '1px solid #f1f5f9' }}>
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, flex: '1 1 280px', minWidth: 0 }}>
+        {select && <input type="checkbox" checked={select.on} onChange={select.toggle} aria-label={`Select ${t.key}`} style={{ width: 16, height: 16, marginTop: 3, accentColor: '#0052ff', flex: 'none' }} />}
         <button onClick={() => a.toggle(t)} aria-label="Toggle done" style={checkStyle(done)}>{done && <Icon name="check" size={13} />}</button>
         <div style={{ minWidth: 0 }}>
           <p onClick={() => a.open(t)} style={titleStyle(done)}>{t.title}</p>

@@ -1,6 +1,6 @@
-import { BadRequestException, Body, Controller, Delete, Get, NotFoundException, Param, Patch, Post } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Delete, Get, NotFoundException, Param, Patch, Post, Query } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
-import { dayLabel, fmtT } from '@bos/shared';
+import { dayLabel, fmtT, addDays } from '@bos/shared';
 import { PrismaService } from '../core/prisma.service';
 import { AccessService } from '../core/access.service';
 import { NotifyService } from '../core/notify.service';
@@ -18,6 +18,7 @@ const map = (m: MeetingRow) => ({
   agenda: m.agenda, notes: m.notes, organizerId: m.organizerId, attendees: m.attendees.map(a => a.userId), guests: m.guests,
   actions: m.actions.map(a => ({ id: a.id, text: a.text, assigneeId: a.assigneeId, taskId: a.taskId })),
 });
+const PAST_DAYS = 90; // past meetings kept in the everyday list
 const LINK = /^https?:\/\/\S+$/i;
 const EMAIL = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 const cleanGuests = (v: unknown): string[] => {
@@ -76,10 +77,23 @@ export class MeetingsController {
     return data;
   }
 
+  /** Upcoming meetings and the last 90 days. Older ones page in from /meetings/past. */
   @Get()
   async list(@Me() me: AuthUser) {
-    const rows = await this.prisma.meeting.findMany({ where: { cancelledAt: null, OR: [{ organizerId: me.id }, { attendees: { some: { userId: me.id } } }] }, include, orderBy: [{ date: 'asc' }, { start: 'asc' }] });
+    const { today } = await this.orgs.ctx();
+    const rows = await this.prisma.meeting.findMany({ where: { cancelledAt: null, date: { gte: toDate(addDays(today, -PAST_DAYS)) }, OR: [{ organizerId: me.id }, { attendees: { some: { userId: me.id } } }] }, include, orderBy: [{ date: 'asc' }, { start: 'asc' }] });
     return rows.map(map);
+  }
+
+  /** Meetings more than 90 days ago, newest first, 50 at a time (`before` = the last one's id). */
+  @Get('past')
+  async past(@Me() me: AuthUser, @Query('before') before?: string) {
+    const { today } = await this.orgs.ctx();
+    const cursor = before ? await this.prisma.meeting.findFirst({ where: { id: before }, select: { date: true, start: true } }) : null;
+    const mine = { OR: [{ organizerId: me.id }, { attendees: { some: { userId: me.id } } }] };
+    const older = cursor ? { OR: [{ date: { lt: cursor.date } }, { date: cursor.date, start: { lt: cursor.start } }] } : { date: { lt: toDate(addDays(today, -PAST_DAYS)) } };
+    const rows = await this.prisma.meeting.findMany({ where: { cancelledAt: null, AND: [mine, older] }, include, orderBy: [{ date: 'desc' }, { start: 'desc' }], take: 51 });
+    return { rows: rows.slice(0, 50).map(map), more: rows.length > 50 };
   }
 
   /** Meetings cancelled in the last 90 days, kept for the record. */

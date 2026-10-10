@@ -5,11 +5,16 @@ import { DealDialog } from '@/components/forms';
 import { useAct, useApp, useQ } from '@/lib/app';
 import type { Opportunity } from '@/lib/types';
 import { Avatar, Btn, Icon, PageHead } from '@/components/ui';
+import { FilterBar, MultiFilter, SearchBox, listOf, useUrlState } from '@/components/filters';
 import { ExportBtn } from '@/components/export-btn';
 
 export default function Pipeline() {
   const { person, has } = useApp(); const act = useAct();
-  const opps = useQ<Opportunity[]>('opportunities').data || [];
+  const allOpps = useQ<Opportunity[]>('opportunities').data || [];
+  const [f, set] = useUrlState({ q: '', owner: '', customer: '' });
+  const [ownF, custF] = [listOf(f.owner), listOf(f.customer)]; const q = f.q.trim().toLowerCase();
+  const active = !!(f.q || f.owner || f.customer); const clear = () => set({ q: '', owner: '', customer: '' });
+  const opps = allOpps.filter(o => (!q || `${o.name} ${o.customer} ${o.next}`.toLowerCase().includes(q)) && (!ownF.length || ownF.includes(o.ownerId)) && (!custF.length || custF.includes(o.customerId)));
   const open = opps.filter(o => o.stage < 4);
   const [deal, setDeal] = useState<Opportunity | 'new' | null>(null); const edit = has('customer.update');
   return <>
@@ -21,6 +26,11 @@ export default function Pipeline() {
         {edit && <Btn kind="pri" icon="plus" onClick={() => setDeal('new')} style={{ alignSelf: 'flex-end' }}>New deal</Btn>}
       </div>} />
     {deal && <DealDialog deal={deal === 'new' ? undefined : deal} onClose={() => setDeal(null)} />}
+    <FilterBar active={active} onClear={clear}>
+      <SearchBox value={f.q} onChange={v => set({ q: v })} placeholder="Search deals, customers, next steps" />
+      <MultiFilter label="Owner" value={ownF} onChange={v => set({ owner: v.join(',') })} options={[...new Set(allOpps.map(o => o.ownerId))].map(id => ({ value: id, label: person(id).name })).sort((a, b) => a.label.localeCompare(b.label))} />
+      <MultiFilter label="Customer" value={custF} onChange={v => set({ customer: v.join(',') })} options={[...new Map(allOpps.map(o => [o.customerId, o.customer])).entries()].map(([value, label]) => ({ value, label })).sort((a, b) => a.label.localeCompare(b.label))} />
+    </FilterBar>
     <div style={{ display: 'flex', gap: 14, overflowX: 'auto', paddingBottom: 8, alignItems: 'flex-start' }}>
       {STAGES.map((name, i) => { const cards = opps.filter(o => o.stage === i);
         return (

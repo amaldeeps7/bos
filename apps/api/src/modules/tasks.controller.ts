@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, Delete, ForbiddenException, Get, HttpCode, NotFoundException, Param, Patch, Post } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Delete, ForbiddenException, Get, HttpCode, NotFoundException, Param, Patch, Post, Query } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { TASK_STATUS, fmtT, nowHours } from '@bos/shared';
 import { PrismaService } from '../core/prisma.service';
@@ -13,6 +13,7 @@ import { d, oneOf, str, toDate } from '../core/util';
 
 const STATUSES = Object.keys(TASK_STATUS);
 const PRIORITIES = ['High', 'Medium', 'Low'] as const;
+const RECENT_DAYS = 30; // finished tasks stay in the everyday list this long
 const include = { events: { orderBy: { createdAt: 'asc' } }, blocks: true } satisfies Prisma.TaskInclude;
 type TaskRow = Prisma.TaskGetPayload<{ include: typeof include }>;
 
@@ -44,11 +45,52 @@ export class TasksController {
     return mapTask(await this.get(me, id), me.id, today);
   }
 
+  /** Open tasks, plus those finished in the last 30 days. Older finished ones page in from /tasks/history. */
   @Get() @Perm('task.read')
   async list(@Me() me: AuthUser) {
     const { today } = await this.orgs.ctx();
-    const rows = await this.prisma.task.findMany({ where: this.where(me), include, orderBy: { due: 'asc' } });
+    const recent = new Date(Date.now() - RECENT_DAYS * 86400_000);
+    const rows = await this.prisma.task.findMany({ where: { AND: [this.where(me), { OR: [{ status: { not: 'done' } }, { doneAt: { gte: recent } }, { doneAt: null }] }] }, include, orderBy: { due: 'asc' } });
     return rows.map(t => mapTask(t, me.id, today));
+  }
+
+  /** Tasks finished more than 30 days ago, newest first, 50 at a time (`before` = the last one's id). */
+  @Get('history') @Perm('task.read')
+  async history(@Me() me: AuthUser, @Query('before') before?: string, @Query('q') q?: string) {
+    const { today } = await this.orgs.ctx();
+    const recent = new Date(Date.now() - RECENT_DAYS * 86400_000);
+    const cursor = before ? await this.prisma.task.findFirst({ where: { id: before, ...this.where(me) }, select: { doneAt: true, id: true } }) : null;
+    const search = String(q || '').trim();
+    const rows = await this.prisma.task.findMany({
+      where: { AND: [this.where(me), { status: 'done', doneAt: { lt: cursor?.doneAt || recent } },
+        ...(search ? [{ OR: [{ title: { contains: search, mode: 'insensitive' as const } }, ...(/^\d+$/.test(search.replace(/^TSK-/i, '')) ? [{ key: Number(search.replace(/^TSK-/i, '')) }] : [])] }] : [])] },
+      include, orderBy: [{ doneAt: 'desc' }, { id: 'desc' }], take: 51 });
+    return { rows: rows.slice(0, 50).map(t => mapTask(t, me.id, today)), more: rows.length > 50 };
+  }
+
+  /** One task (e.g. an old one opened from history or a link). */
+  @Get(':id') @Perm('task.read')
+  async one(@Me() me: AuthUser, @Param('id') id: string) { return this.out(me, id); }
+
+  /**
+   * Changes several tasks at once: status, priority, due date, assignee, or delete. Each task goes through the same
+   * checks as changing it on its own (so someone can't reassign or delete what they couldn't one by one).
+   */
+  @Post('bulk') @HttpCode(200) @Perm('task.update')
+  async bulk(@Me() me: AuthUser, @Body() b: any) {
+    const ids: string[] = Array.isArray(b.ids) ? [...new Set(b.ids.map(String))].slice(0, 200) as string[] : [];
+    if (!ids.length) throw new BadRequestException('Select some tasks first.');
+    const change: Record<string, unknown> = {};
+    for (const k of ['status', 'priority', 'due', 'assigneeId'] as const) if (b[k] !== undefined && b[k] !== '') change[k] = b[k];
+    if (!b.delete && !Object.keys(change).length) throw new BadRequestException('Choose what to change.');
+    if (b.delete) AccessService.require(me, 'task.delete');
+    let done = 0; const skipped: string[] = [];
+    for (const id of ids) {
+      try { if (b.delete) await this.remove(me, id); else await this.update(me, id, change); done++; }
+      catch (e) { skipped.push((e as Error).message); }
+    }
+    const what = b.delete ? 'deleted' : 'updated';
+    return { done, skipped: skipped.length, message: skipped.length ? `${done} ${what}; ${skipped.length} skipped (${skipped[0]})` : `${done} task${done === 1 ? '' : 's'} ${what}.` };
   }
 
   @Post() @Perm('task.create')
@@ -76,7 +118,10 @@ export class TasksController {
     if (b.title !== undefined) data.title = str(b.title, 'Title', { max: 300 }).replace(/\n/g, ' ');
     if (b.desc !== undefined) data.desc = str(b.desc, 'Description');
     if (b.due !== undefined) data.due = toDate(b.due);
-    if (b.status !== undefined && b.status !== t.status) { data.status = oneOf(b.status, 'Status', STATUSES); log.push('changed status to ' + TASK_STATUS[b.status][0]); }
+    if (b.status !== undefined && b.status !== t.status) {
+      data.status = oneOf(b.status, 'Status', STATUSES); data.doneAt = b.status === 'done' ? new Date() : null;
+      log.push('changed status to ' + TASK_STATUS[b.status][0]);
+    }
     if (b.priority !== undefined && b.priority !== t.priority) { data.priority = oneOf(b.priority, 'Priority', PRIORITIES); log.push('set priority to ' + b.priority); }
     if (b.assigneeId !== undefined && b.assigneeId !== t.assigneeId) {
       AccessService.require(me, 'task.assign');

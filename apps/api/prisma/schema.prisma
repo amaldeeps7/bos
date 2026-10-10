@@ -325,9 +325,13 @@ model Task {
   createdAt  DateTime     @default(now())
   events     TaskEvent[]
   blocks     TimeBlock[]
+  doneAt     DateTime? // when it was last marked done (cleared if reopened)
 
   @@unique([orgId, key])
   @@index([orgId])
+  @@index([orgId, assigneeId, status, due])
+  @@index([orgId, projectId])
+  @@index([orgId, status, doneAt])
 }
 
 model TaskEvent {
@@ -382,6 +386,7 @@ model Meeting {
   actions     ActionItem[]
 
   @@index([orgId])
+  @@index([orgId, date])
 }
 
 model MeetingAttendee {
@@ -435,6 +440,7 @@ model Quote {
 
   @@unique([orgId, no])
   @@index([orgId])
+  @@index([orgId, date])
 }
 
 model Invoice {
@@ -464,6 +470,8 @@ model Invoice {
 
   @@unique([entityId, no])
   @@index([orgId])
+  @@index([orgId, date])
+  @@index([orgId, customerId])
 }
 
 model Payment {
@@ -483,6 +491,7 @@ model Payment {
 
   @@unique([entityId, no])
   @@index([orgId])
+  @@index([orgId, date])
 }
 
 model PaymentAllocation {
@@ -596,6 +605,7 @@ model Notification {
   createdAt DateTime     @default(now())
 
   @@index([orgId])
+  @@index([orgId, userId, createdAt])
 }
 
 /// Monthly totals imported from the previous system, so reports cover the months before go-live.

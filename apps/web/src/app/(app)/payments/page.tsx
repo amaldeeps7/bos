@@ -7,18 +7,27 @@ import type { Customer, Invoice, Payment } from '@/lib/types';
 import { Btn, Card, Icon, PageHead, Tabs } from '@/components/ui';
 import { PaymentDialogEdit } from '@/components/forms';
 import { ExportBtn } from '@/components/export-btn';
+import { DateRange, EmptyFiltered, FilterBar, MultiFilter, SearchBox, SortHead, inRange, listOf, rangeOf, sortRows, useUrlState } from '@/components/filters';
 
 const RC = '150px minmax(160px,1.2fr) 90px minmax(180px,1.4fr) 150px 130px 32px';
 const AC = 'minmax(180px,1.6fr) repeat(5,minmax(100px,1fr))';
 const AGE = ['Not yet due', '1–30 days overdue', '31–60 days overdue', 'Over 60 days'];
 
 export default function Payments() {
-  const router = useRouter(); const act = useAct(); const { today, can, has } = useApp(); const [edit, setEdit] = useState<Payment | null>(null);
-  const payments = useQ<Payment[]>('payments').data || [];
+  const router = useRouter(); const act = useAct(); const { today, can, has, me } = useApp(); const [edit, setEdit] = useState<Payment | null>(null);
+  const allPayments = useQ<Payment[]>('payments').data || [];
   const invoices = useQ<Invoice[]>(can('billing') ? 'invoices' : null).data || [];
   const customers = useQ<Customer[]>('customers').data || [];
   const cname = new Map(customers.map(c => [c.id, c.name]));
-  const [tab, setTab] = useState<'receipts' | 'receivables'>('receipts');
+  const [f, set] = useUrlState({ tab: 'receipts', q: '', customer: '', method: '', period: '', from: '', to: '', sort: '' });
+  const tab = f.tab as 'receipts' | 'receivables'; const setTab = (t: 'receipts' | 'receivables') => set({ tab: t });
+  const custF = listOf(f.customer), methF = listOf(f.method); const range = rangeOf(f.period, f.from, f.to, today, me.org.fyStart); const q = f.q.trim().toLowerCase();
+  const active = !!(f.q || f.customer || f.method || f.period);
+  const clear = () => set({ q: '', customer: '', method: '', period: '', from: '', to: '' });
+  const sortBy = (s: string) => set({ sort: s });
+  const payments = sortRows(allPayments.filter(r => (!q || `${r.no} ${r.ref} ${cname.get(r.customerId) || ''} ${r.allocations.map(a => a.invoiceNo).join(' ')}`.toLowerCase().includes(q))
+    && (!custF.length || custF.includes(r.customerId)) && (!methF.length || methF.includes(r.method)) && inRange(r.date, range)),
+    f.sort, (r, k) => (k === 'no' ? r.no : k === 'customer' ? cname.get(r.customerId) || '' : k === 'amount' ? r.amount : r.date));
   const open = invoices.filter(i => i.bal > 0);
   const bucket = (i: Invoice) => { const o = diffDays(i.due, today); return o >= 0 ? 0 : -o <= 30 ? 1 : -o <= 60 ? 2 : 3; };
   const tot = [0, 0, 0, 0]; open.forEach(i => { tot[bucket(i)] += i.bal; });
@@ -28,12 +37,18 @@ export default function Payments() {
       {tab === 'receipts' ? <ExportBtn name="receipts" rows={() => payments.map(r => ({ 'Receipt no.': r.no, Date: r.date, Customer: cname.get(r.customerId) || '', Method: r.method, Reference: r.ref, Amount: r.amount, 'Against invoices': r.allocations.map(a => `${a.invoiceNo} (${a.amount})`).join('; ') }))} />
         : <ExportBtn name="receivables" rows={() => open.map(i => ({ 'Invoice no.': i.no, Customer: cname.get(i.customerId) || '', 'Due date': i.due, 'Days overdue': Math.max(0, -diffDays(i.due, today)), Ageing: AGE[bucket(i)], Total: i.calc.grand, Balance: i.bal }))} />}
       {tab === 'receivables' && <Btn icon="bell-ring" onClick={() => act('payments/remind-overdue')}>Remind overdue customers</Btn>}</div>} />
-    <Tabs tabs={[{ id: 'receipts', label: 'Receipts', count: payments.length }, { id: 'receivables', label: 'Receivables', count: open.length }]} value={tab} onChange={setTab} />
+    <Tabs tabs={[{ id: 'receipts', label: 'Receipts', count: allPayments.length }, { id: 'receivables', label: 'Receivables', count: open.length }]} value={tab} onChange={setTab} />
     {edit && <PaymentDialogEdit payment={edit} onClose={() => setEdit(null)} />}
+    {tab === 'receipts' && <FilterBar active={active} onClear={clear}>
+      <SearchBox value={f.q} onChange={v => set({ q: v })} placeholder="Search receipt, reference (UTR), invoice" />
+      <MultiFilter label="Customer" value={custF} onChange={v => set({ customer: v.join(',') })} options={[...new Set(allPayments.map(r => r.customerId))].map(id => ({ value: id, label: cname.get(id) || '' })).sort((a, b) => a.label.localeCompare(b.label))} />
+      <MultiFilter label="Method" value={methF} onChange={v => set({ method: v.join(',') })} options={[...new Set(allPayments.map(r => r.method))].map(m => ({ value: m, label: m }))} />
+      <DateRange label="Received" period={f.period} from={f.from} to={f.to} onChange={v => set(v)} />
+    </FilterBar>}
     {tab === 'receipts' ? (
       <Card style={{ overflowX: 'auto' }}>
         <div style={{ minWidth: 900 }}>
-          <div className="grid-head" style={{ display: 'grid', gridTemplateColumns: RC }}><span>Receipt</span><span>Customer</span><span>Received</span><span>Method &amp; reference</span><span>Applied to</span><span style={{ textAlign: 'right' }}>Amount</span><span /></div>
+          <div className="grid-head" style={{ display: 'grid', gridTemplateColumns: RC }}><SortHead label="Receipt" k="no" sort={f.sort} onSort={sortBy} /><SortHead label="Customer" k="customer" sort={f.sort} onSort={sortBy} /><SortHead label="Received" k="date" sort={f.sort} onSort={sortBy} /><span>Method &amp; reference</span><span>Applied to</span><SortHead label="Amount" k="amount" sort={f.sort} onSort={sortBy} align="right" /><span /></div>
           {payments.map(r => (
             <div key={r.id} style={{ display: 'grid', gridTemplateColumns: RC, gap: 16, alignItems: 'center', padding: '12px 20px', borderBottom: '1px solid #f1f5f9', fontSize: 14 }}>
               <span className="mono" style={{ fontSize: 13 }}>{r.no}</span>
@@ -45,6 +60,7 @@ export default function Payments() {
               {has('payment.update') ? <button onClick={() => setEdit(r)} title="Edit receipt" aria-label={`Edit ${r.no}`} className="ghost-icon" style={{ width: 32, height: 32 }}><Icon name="pencil" size={14} /></button> : <span />}
             </div>
           ))}
+          {!payments.length && <EmptyFiltered onClear={active ? clear : undefined} text={active ? undefined : 'No payments recorded yet.'} />}
         </div>
       </Card>
     ) : <>

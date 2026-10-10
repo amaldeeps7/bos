@@ -21,9 +21,13 @@ export default function ProjectDetail() {
   const quotes = useQ<Quote[]>(can('sales') ? 'quotes' : null).data || [];
   const newMeeting = useOpenNewMeeting();
   const [editing, setEditing] = useState(false); const [ms, setMs] = useState<Milestone | 'new' | null>(null);
+  const [tt, setTt] = useState<'open' | 'done' | 'all'>('open'); const [tWho, setTWho] = useState('');
   if (!p) return <p style={{ color: '#64748b' }}>Loading…</p>;
   const st = projStats(p);
-  const pTasks = tasks.filter(t => t.projectId === p.id && t.status !== 'done').sort((a, b) => a.due.localeCompare(b.due));
+  const projTasks = tasks.filter(t => t.projectId === p.id);
+  const pTasks = projTasks.filter(t => (tt === 'all' || (tt === 'done') === (t.status === 'done')) && (!tWho || t.assigneeId === tWho))
+    .sort((a, b) => (tt === 'done' ? b.due.localeCompare(a.due) : a.due.localeCompare(b.due)));
+  const tCount = (k: typeof tt) => projTasks.filter(t => (k === 'all' || (k === 'done') === (t.status === 'done')) && (!tWho || t.assigneeId === tWho)).length;
   const ready = p.milestones.filter(m => m.status === 'COMPLETED');
   const memberIds = [p.ownerId, ...new Set(tasks.filter(t => t.projectId === p.id).map(t => t.assigneeId).filter(a => a !== p.ownerId))];
   const activity = [...p.milestones].reverse().filter(m => ['COMPLETED', 'INVOICED', 'PAID'].includes(m.status)).map(m => ({
@@ -71,9 +75,18 @@ export default function ProjectDetail() {
     </Card>
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(min(100%,400px),1fr))', gap: 20, alignItems: 'start' }}>
       {can('tasks') && <Card>
-        <CardHead title="Open tasks" count={pTasks.length} sub={!has('task.read_all') && p.ownerId !== me.user.id ? 'Your tasks on this project. The project owner sees them all.' : undefined} right={has('task.create') && <Btn size="sm" icon="plus" onClick={() => setUi({ newTask: { projectId: p.id } })} style={{ boxShadow: 'none' }}>Add task</Btn>} />
+        <CardHead title="Tasks" count={pTasks.length} sub={!has('task.read_all') && p.ownerId !== me.user.id ? 'Your tasks on this project. The project owner sees them all.' : undefined} right={has('task.create') && <Btn size="sm" icon="plus" onClick={() => setUi({ newTask: { projectId: p.id } })} style={{ boxShadow: 'none' }}>Add task</Btn>} />
+        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, padding: '10px 20px', borderBottom: '1px solid #f1f5f9' }}>
+          <div role="tablist" style={{ display: 'inline-flex', padding: 3, gap: 2, background: '#f1f5f9', borderRadius: 8 }}>
+            {(['open', 'done', 'all'] as const).map(k => <button key={k} role="tab" aria-selected={tt === k} onClick={() => setTt(k)} style={{ height: 28, padding: '0 10px', border: 0, borderRadius: 6, fontSize: 13, fontWeight: 500, cursor: 'pointer', background: tt === k ? '#fff' : 'transparent', color: tt === k ? '#0f172a' : '#64748b' }}>{k === 'open' ? 'Open' : k === 'done' ? 'Done' : 'All'} <span style={{ color: '#94a3b8' }}>{tCount(k)}</span></button>)}
+          </div>
+          <select aria-label="Filter by assignee" value={tWho} onChange={e => setTWho(e.target.value)} style={{ height: 32, border: '1px solid #cbd5e1', borderRadius: 8, padding: '0 8px', fontSize: 13, background: '#fff' }}>
+            <option value="">Everyone</option>{[...new Set(projTasks.map(t => t.assigneeId))].map(uid => <option key={uid} value={uid}>{person(uid).name}</option>)}
+          </select>
+          <button className="link" onClick={() => router.push(`/tasks?tab=${has('task.read_all') ? 'all' : 'mine'}&project=${p.id}&view=board`)} style={{ marginLeft: 'auto', fontSize: 13 }}>Open as board</button>
+        </div>
         {pTasks.map(t => <ProjectTaskRow key={t.id} t={t} />)}
-        {!pTasks.length && <p style={{ margin: 0, padding: 20, fontSize: 14, color: '#64748b' }}>No open tasks.</p>}
+        {!pTasks.length && <p style={{ margin: 0, padding: 20, fontSize: 14, color: '#64748b' }}>{tt === 'done' ? 'Nothing finished yet.' : tt === 'open' ? 'No open tasks.' : 'No tasks yet.'}</p>}
       </Card>}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
         <Card>

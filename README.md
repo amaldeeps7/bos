@@ -97,6 +97,14 @@ The API suite runs the API as `bos_app`, so row-level security is exercised for 
 - **Notifications** open the item they're about (the task, meeting, invoice or document waiting for approval), are marked read when opened, refresh every 30 seconds, and have a full page with older ones.
 - **Payment reminders** (Settings → Reminders) go out by themselves from 9 am: 3 days before the due date, on it, and 7, 15 and 30 days late, each step once per invoice. A part payment pauses them for a week. At 15 days the account owner is copied; at 30, Finance too, and new quotations for that customer show a warning.
 
+## Lists
+
+- **Tasks:** search (title, `TSK-123`, project or customer); filters for status, priority, project, assignee and due date (this month, this quarter, this financial year, custom…); show or hide completed tasks; **List** (grouped by due date, status, project, assignee or priority, with a choice of sort), **Board** (columns by status: drag a card, or use its "Move to" menu) and **Calendar** (by due date) views; select several to change status, priority, assignee or due date, or delete them. Tasks finished more than 30 days ago aren't loaded until you ask ("Load tasks completed more than 30 days ago").
+- **Every list** has search and the filters that matter for it (customer, owner, status, entity, method, category…), finance lists have a date range, and table columns sort when clicked. Filters live in the page address, so a filtered view can be bookmarked or shared, and Export downloads exactly what's shown.
+- **Approvals** can be approved or sent back several at a time. **Reports** cover a chosen period (last 6 or 12 months, this or last financial year, or any months, up to 24).
+- **Project page:** Open, Done and All tasks, filtered by person, or opened as a board.
+- Meetings older than 90 days page in from the Past tab. The database has indexes for these filters (tasks by assignee/status/due and project, documents and payments by date).
+
 ## Background jobs
 
 Background work runs on BullMQ (Redis): the once-a-minute scheduler (meeting reminders, the daily digest, expired exports, deleting closed organisations) and data exports. Each job runs once, on one instance, and is picked up again if an instance restarts mid-way; the scheduler is a repeating job, so it runs once a minute however many API instances there are. Every instance runs workers by default; `WORKERS=off` makes an instance only queue work (e.g. run web-facing instances with `WORKERS=off` and a separate worker instance), and `WORKER_CONCURRENCY` sets how many jobs one instance runs at once. Redis should be persistent and not evict keys (`maxmemory-policy noeviction`).

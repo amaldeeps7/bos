@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import { inr } from '@bos/shared';
 import { useAct, useApp, useQ } from '@/lib/app';
 import type { CatalogItem } from '@/lib/types';
+import { EmptyFiltered, FilterBar, MultiFilter, SearchBox, listOf, useUrlState } from '@/components/filters';
 import { Btn, Card, Icon, PageHead } from '@/components/ui';
 
 const COLS = 'minmax(240px,2fr) 120px 100px 140px 70px 40px';
@@ -27,15 +28,23 @@ function Row({ c, sacs, rates, editable }: { c: CatalogItem; sacs: string[]; rat
 
 export default function Catalog() {
   const act = useAct(); const { me, has } = useApp();
-  const items = useQ<CatalogItem[]>('catalog').data || [];
+  const allItems = useQ<CatalogItem[]>('catalog').data || [];
+  const [f, set] = useUrlState({ q: '', sac: '' }); const sacF = listOf(f.sac); const q = f.q.trim().toLowerCase();
+  const items = allItems.filter(c => (!q || `${c.d} ${c.unit} ${c.sac}`.toLowerCase().includes(q)) && (!sacF.length || sacF.includes(c.sac)));
+  const active = !!(f.q || f.sac); const clear = () => set({ q: '', sac: '' });
   const sacs = Object.keys(me.org.sacRates).sort(); const editable = has('catalog.manage');
   return <>
-    <PageHead title="Catalogue" sub={`${items.length} services at their standard rates. Quotations and invoices pick from here; changing a rate never touches documents already raised.`} subStyle={{ maxWidth: '68ch' }}
+    <PageHead title="Catalogue" sub={`${allItems.length} services at their standard rates. Quotations and invoices pick from here; changing a rate never touches documents already raised.`} subStyle={{ maxWidth: '68ch' }}
       right={editable && <Btn kind="pri" icon="plus" onClick={() => act('catalog', {}, { quiet: true })}>Add item</Btn>} />
+    <FilterBar active={active} onClear={clear}>
+      <SearchBox value={f.q} onChange={v => set({ q: v })} placeholder="Search services" />
+      <MultiFilter label="SAC" value={sacF} onChange={v => set({ sac: v.join(',') })} options={[...new Set(allItems.map(c => c.sac))].sort().map(x => ({ value: x, label: `${x} · ${me.org.sacRates[x] ?? 18}%` }))} />
+    </FilterBar>
     <Card style={{ overflowX: 'auto' }}>
       <div style={{ minWidth: 760 }}>
         <div className="grid-head" style={{ display: 'grid', gridTemplateColumns: COLS, gap: 12 }}><span>Service</span><span>SAC</span><span>Unit</span><span style={{ textAlign: 'right' }}>Rate (₹)</span><span style={{ textAlign: 'right' }}>GST</span><span /></div>
         {items.map(c => <Row key={c.id} c={c} sacs={sacs} rates={me.org.sacRates} editable={editable} />)}
+        {!items.length && <EmptyFiltered onClear={active ? clear : undefined} text={active ? undefined : 'No services yet.'} />}
       </div>
     </Card>
     {!editable && <p style={{ margin: 0, fontSize: 13, color: '#64748b' }}>Rates are read-only for your role. Standard rates: {items.slice(0, 3).map(i => `${i.d} ${inr(i.rate)}/${i.unit}`).join(', ')}…</p>}

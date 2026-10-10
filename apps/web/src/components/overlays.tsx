@@ -29,7 +29,10 @@ function useDraft(value: string, save: (v: string) => void) {
 export function TaskPanel() {
   const { ui, setUi } = useApp();
   const tasks = useQ<Task[]>('tasks').data;
-  const t = tasks?.find(x => x.id === ui.taskId);
+  const listed = tasks?.find(x => x.id === ui.taskId);
+  // Older completed tasks aren't in the everyday list: fetch the one asked for.
+  const single = useQ<Task>(ui.taskId && tasks && !listed ? `tasks/${ui.taskId}` : null).data;
+  const t = listed || single;
   if (!ui.taskId || !t) return null;
   return <TaskPanelInner key={t.id} t={t} />;
 }

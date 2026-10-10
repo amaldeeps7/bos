@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpCode, Param, Post } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, HttpCode, Param, Post } from '@nestjs/common';
 import { relTime } from '@bos/shared';
 import { PrismaService } from '../core/prisma.service';
 import { Me, Perm } from '../core/decorators';
@@ -19,6 +19,17 @@ export class ApprovalsController {
       by: names.get(a.requestedById) || '', approver: names.get(a.approverId) || '', age: relTime(a.createdAt),
       status: a.status === 'PENDING' ? (a.approverId === me.id ? 'waiting' : 'sent') : a.status === 'APPROVED' ? 'approved' : 'rejected',
     }));
+  }
+
+  /** Approves (or sends back) several at once: each goes through the same checks as deciding it on its own. */
+  @Post('bulk') @HttpCode(200) @Perm('approval.read')
+  async bulk(@Me() me: AuthUser, @Body() b: any) {
+    const ids: string[] = Array.isArray(b.ids) ? [...new Set(b.ids.map(String))].slice(0, 100) as string[] : [];
+    if (!ids.length) throw new BadRequestException('Select some approvals first.');
+    let done = 0; const skipped: string[] = [];
+    for (const id of ids) { try { await this.svc.decide(me, id, !!b.approve, false); done++; } catch (e) { skipped.push((e as Error).message); } }
+    const verb = b.approve ? 'approved' : 'sent back';
+    return { done, skipped: skipped.length, message: skipped.length ? `${done} ${verb}; ${skipped.length} skipped (${skipped[0]})` : `${done} ${verb}.` };
   }
 
   @Post(':id/decide') @HttpCode(200) @Perm('approval.read')
