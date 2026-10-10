@@ -5,6 +5,13 @@ export interface Me {
   org: { name: string; slug: string; tz: string; currency: string; ourState: string; discLimit: number; sacRates: Record<string, number>; templates: any; entity: { name: string; gstin: string; address: string; bank: string; upi: string } | null };
   demo: boolean; serverTime: string;
 }
+export interface TeamMember { id: string; name: string; title: string; dept: string; email: string; managerId: string | null; status: 'available' | 'meeting' | 'leave'; statusLabel: string; statusText: string }
+export interface Profile extends TeamMember {
+  phone: string; location: string; hours: string; joined: string; leaveUntil: string;
+  manager: { id: string; name: string } | null; reports: { id: string; name: string }[];
+  projects: { id: string; name: string; customer: string; open: number }[];
+  isMe: boolean; canEdit: boolean; canManage: boolean; calendar?: boolean; prefs?: { remind: boolean; mention: boolean; digest: boolean };
+}
 export interface Person { id: string; name: string; title: string; role: string; email: string; status: string }
 export interface TaskEvent { id: string; userId: string; kind: 'comment' | 'sys'; text: string; at: string }
 export interface Task { id: string; key: string; title: string; desc: string; projectId: string; assigneeId: string; reporterId: string; due: string; status: string; priority: string; events: TaskEvent[]; block: { start: number; dur: number } | null }

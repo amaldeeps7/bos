@@ -18,6 +18,8 @@ import { AssetsController, ProjectsController } from './modules/delivery.control
 import { ReportsController } from './modules/reports.controller';
 import { SettingsController } from './modules/settings.controller';
 import { AiController } from './modules/ai.controller';
+import { TeamController } from './modules/team.controller';
+import { SchedulerService } from './modules/scheduler.service';
 import { SearchController } from './modules/search.controller';
 
 @Controller('health')
@@ -31,7 +33,7 @@ class HealthController {
   imports: [CoreModule],
   controllers: [HealthController, AuthController, PeopleController, TasksController, MeetingsController, ApprovalsController,
     CustomersController, OpportunitiesController, CatalogController, QuotesController, InvoicesController, PaymentsController, CreditNotesController,
-    ProjectsController, AssetsController, ReportsController, SettingsController, AiController, SearchController],
-  providers: [{ provide: APP_GUARD, useClass: AuthGuard }, FinanceService, ApprovalsService, DocumentsService],
+    ProjectsController, AssetsController, ReportsController, SettingsController, AiController, SearchController, TeamController],
+  providers: [{ provide: APP_GUARD, useClass: AuthGuard }, FinanceService, ApprovalsService, DocumentsService, SchedulerService],
 })
 export class AppModule {}

@@ -8,7 +8,7 @@ import type { Me, Person, Role } from './types';
 /** UI state shared across screens: overlays, dialogs, assistant, toast, role preview. */
 export interface Ui {
   taskId: string | null; meetId: string | null;
-  meetDialog: MeetDraft | null; newTask: { projectId: string } | null; customer: string | null; search: boolean;
+  meetDialog: MeetDraft | null; newTask: { projectId: string; assigneeId?: string } | null; customer: string | null; search: boolean;
   pay: string | null; credit: string | null; aiOpen: boolean | null; notifOpen: boolean; viewAs: string | null;
 }
 export interface MeetDraft { id?: string; title: string; p: string; date: string; start: string; dur: string; who: string[]; guests: string[]; loc: string; link: string }

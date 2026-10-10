@@ -60,3 +60,8 @@ a:hover { color: var(--blue-hover); text-decoration: underline; }
 .row-btn:hover { background: var(--panel); }
 .ellipsis { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+.org-card:hover { border-color: rgba(0,82,255,.45) !important; }
+.person-link:hover { text-decoration: underline; }
+.chip-link:hover { border-color: #0052ff !important; color: #0052ff !important; }
+.hov-row:hover { background: #f8fafc; }

@@ -95,7 +95,7 @@ export default function ProjectDetail() {
           <CardHead title="People" sub="Open tasks across all projects." />
           {memberIds.map(uid => { const u = person(uid); const n = tasks.filter(t => t.assigneeId === uid && t.status !== 'done').length;
             return (
-              <div key={uid} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 20px' }}>
+              <div key={uid} onClick={() => router.push(`/team/${uid}`)} className="hov-row" role="link" style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 20px', cursor: 'pointer' }}>
                 <Avatar name={u.name} size={32} />
                 <div style={{ flex: 1, minWidth: 0 }}><p style={{ margin: 0, fontSize: 14, fontWeight: 500 }}>{u.name}</p><p style={{ margin: 0, fontSize: 13, color: '#64748b' }}>{uid === p.ownerId ? 'Project owner' : u.title}</p></div>
                 <div style={{ width: 96 }}>

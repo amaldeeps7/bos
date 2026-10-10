@@ -17,7 +17,7 @@ async function main() {
     return;
   }
   // wipe (order matters for FKs)
-  for (const m of ['notification', 'auditLog', 'approval', 'opportunity', 'asset', 'creditNote', 'paymentAllocation', 'payment', 'invoice', 'quote',
+  for (const m of ['emailLog', 'notification', 'auditLog', 'approval', 'opportunity', 'asset', 'creditNote', 'paymentAllocation', 'payment', 'invoice', 'quote',
     'actionItem', 'meetingAttendee', 'meeting', 'timeBlock', 'taskEvent', 'task', 'milestone', 'project', 'customer', 'businessUnit', 'user', 'role',
     'legalEntity', 'catalogItem', 'sac', 'series', 'legacyMonth', 'organization'] as const) {
     await (prisma as any)[m].deleteMany();
@@ -44,14 +44,25 @@ async function main() {
   const hash = await bcrypt.hash('demo1234', 10);
   const U: Record<string, string> = {};
   const people: [string, string, string, string, string, string][] = [
-    ['anand', 'Anand Iyer', 'Owner', 'Owner', 'Active', 'today'], ['priya', 'Priya Raman', 'Project manager', 'Project manager', 'Active', 'now'],
-    ['meera', 'Meera Nair', 'Finance', 'Finance', 'Active', '2h'], ['rohan', 'Rohan Das', 'Sales', 'Sales', 'Active', '1d'],
-    ['arjun', 'Arjun Mehta', 'Engineer', 'Field staff', 'Active', 'today'], ['sara', 'Sara Iqbal', 'Security analyst', 'Field staff', 'Active', 'today'],
-    ['dev', 'Dev Khanna', 'Designer', 'Field staff', 'Active', '3d'], ['kavya', 'Kavya Menon', 'Sales', 'Sales', 'Invited', ''],
+    ['anand', 'Anand Iyer', 'Founder & CEO', 'Owner', 'Active', 'today'], ['priya', 'Priya Raman', 'Head of Delivery', 'Project manager', 'Active', 'now'],
+    ['meera', 'Meera Nair', 'Finance manager', 'Finance', 'Active', '2h'], ['rohan', 'Rohan Das', 'Sales lead', 'Sales', 'Active', '1d'],
+    ['arjun', 'Arjun Mehta', 'Senior engineer', 'Field staff', 'Active', 'today'], ['sara', 'Sara Iqbal', 'Security lead', 'Field staff', 'Active', 'today'],
+    ['dev', 'Dev Khanna', 'Product designer', 'Field staff', 'Active', '3d'], ['kavya', 'Kavya Menon', 'Account executive', 'Sales', 'Invited', ''],
   ];
+  // reporting line, department, phone, joined
+  const org: Record<string, [string, string | null, string, string]> = {
+    anand: ['Leadership', null, '+91 98200 11402', '2019-01-07'], priya: ['Delivery', 'anand', '+91 98201 33718', '2021-03-01'],
+    sara: ['Cybersecurity', 'anand', '+91 99672 40513', '2022-08-16'], rohan: ['Sales', 'anand', '+91 98923 18044', '2022-06-06'],
+    meera: ['Finance', 'anand', '+91 98330 77261', '2021-02-15'], arjun: ['Delivery', 'priya', '+91 97690 52288', '2021-11-08'],
+    dev: ['Delivery', 'priya', '+91 98197 61930', '2023-04-03'], kavya: ['Sales', 'rohan', '', ''],
+  };
   const last: Record<string, Date | null> = { now: new Date(), today: ago(0, 9), '2h': new Date(Date.now() - 2 * 3600e3), '1d': ago(1, 17), '3d': ago(3, 12), '': null };
-  for (const [k, name, title, role, status, la] of people)
-    U[k] = (await prisma.user.create({ data: { email: `${k}@democonsulting.in`, name, title, roleId: roles[role], status, passwordHash: status === 'Active' ? hash : null, lastActiveAt: last[la] } })).id;
+  for (const [k, name, title, role, status, la] of people) {
+    const [dept, , phone, joined] = org[k];
+    U[k] = (await prisma.user.create({ data: { email: `${k}@democonsulting.in`, name, title, roleId: roles[role], status, passwordHash: status === 'Active' ? hash : null, lastActiveAt: last[la],
+      dept, phone, location: 'Mumbai', joinedAt: joined ? new Date(joined + 'T00:00:00Z') : null, leaveUntil: k === 'meera' ? D(2) : null } })).id;
+  }
+  for (const [k, [, mgr]] of Object.entries(org)) if (mgr) await prisma.user.update({ where: { id: U[k] }, data: { managerId: U[mgr] } });
 
   const le1 = await prisma.legalEntity.create({ data: { name: 'Demo Consulting Pvt Ltd', gstin: '29AABCD4417E1Z3', pan: 'AABCD4417E', cin: 'U72900KA2019PTC124518', address: '2nd floor, 100 Feet Road, Indiranagar, Bengaluru 560038', bank: 'HDFC Bank · A/c 50200012345678 · IFSC HDFC0000123', upi: 'democonsulting@hdfcbank', isDefault: true } });
   await prisma.legalEntity.create({ data: { name: 'Demo Consulting Services LLP', gstin: '27AAJFD2210K1ZP', pan: 'AAJFD2210K', cin: 'AAT-4471', address: 'Unit 504, Kamala Mills, Lower Parel, Mumbai 400013', bank: 'ICICI Bank · A/c 039905001122 · IFSC ICIC0000399', upi: 'dcsllp@icici', isDefault: false } });

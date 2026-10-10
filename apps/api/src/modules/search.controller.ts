@@ -48,10 +48,15 @@ export class SearchController {
       .map(o => ({ type: 'deal', id: o.id, title: o.name, sub: `${o.customer.name} · ${inr(o.value)}`, href: '/pipeline' })));
     if (has('asset.read')) add('asset', 'Assets', async () => (await this.prisma.asset.findMany({ where: { OR: [{ name: I(q) }, { code: I(q) }, { cat: I(q) }] }, take }))
       .map(a => ({ type: 'asset', id: a.id, title: a.name, sub: `${a.code} · ${a.cat}`, href: '/assets' })));
-    add('person', 'People', async () => (await this.prisma.user.findMany({ where: { status: { not: 'Deactivated' }, OR: [{ name: I(q) }, { email: I(q) }, { title: I(q) }] }, include: { role: true }, take }))
-      .map(u => ({ type: 'person', id: u.id, title: u.name, sub: `${u.title || u.role.name} · ${u.email}`, href: has('user.read') ? '/settings/users' : undefined })));
+    add('person', 'People', async () => (await this.prisma.user.findMany({ where: { status: { not: 'Deactivated' }, OR: [{ name: I(q) }, { email: I(q) }, { title: I(q) }, { dept: I(q) }] }, include: { role: true }, take }))
+      .map(u => ({ type: 'person', id: u.id, title: u.name, sub: `${u.title || u.role.name}${u.dept ? ` · ${u.dept}` : ''} · ${u.status === 'Invited' ? 'invited' : u.email}`, href: u.status === 'Active' ? `/team/${u.id}` : has('user.read') ? '/settings/users' : undefined })));
 
-    const groups = (await Promise.all(jobs)).filter(g => g.hits.length);
+    // Best matches first: a hit whose title starts with the query (or a word in it does) beats one found only in a note.
+    const ql = q.toLowerCase();
+    const score = (h: Hit) => { const t = h.title.toLowerCase(); return t.startsWith(ql) ? 3 : t.split(/[\s·—\-/,(]+/).some(w => w.startsWith(ql)) ? 2 : t.includes(ql) ? 1 : 0; };
+    const groups = (await Promise.all(jobs)).filter(g => g.hits.length)
+      .map((g, i) => { const hits = [...g.hits].sort((a, b) => score(b) - score(a)); return { g: { ...g, hits }, i, best: score(hits[0]) }; })
+      .sort((a, b) => b.best - a.best || a.i - b.i).map(x => x.g);
     return { q, groups };
   }
 }

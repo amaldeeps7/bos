@@ -111,14 +111,14 @@ export function MeetingDialog() {
 export function useOpenNewMeeting() {
   const { setUi, today, now, me } = useApp();
   const meetings = useQ<Meeting[]>('meetings').data || []; const tasks = useQ<Task[]>('tasks').data || [];
-  return (projectId = '') => {
+  return (projectId = '', withId?: string) => {
     const busy = [...meetings.filter(m => diffDays(m.date, today) === 0), ...tasks.filter(t => t.block).map(t => t.block!)];
     const slot = findSlot(0.5, now, busy);
     // Once today is full (or over), propose the first free slot tomorrow.
     const tomorrow = addDays(today, 1);
     const date = slot === null ? tomorrow : today;
     const start = slot ?? findSlot(0.5, 0, meetings.filter(m => m.date === tomorrow)) ?? 9;
-    setUi({ meetDialog: { title: '', p: projectId, date, start: String(start), dur: '0.5', who: [me.user.id], guests: [], loc: 'Google Meet', link: '' } });
+    setUi({ meetDialog: { title: '', p: projectId, date, start: String(start), dur: '0.5', who: withId && withId !== me.user.id ? [me.user.id, withId] : [me.user.id], guests: [], loc: 'Google Meet', link: '' } });
   };
 }
 
@@ -126,7 +126,7 @@ export function NewTaskDialog() {
   const { ui, setUi, me, today, people, toast, has, person } = useApp(); const act = useAct();
   const projects = useQ<Project[]>('projects').data || [];
   const [nt, setNt] = useState({ title: '', desc: '', projectId: '', assigneeId: me.user.id, due: addDays(today, 1), priority: 'Medium' });
-  useEffect(() => { if (ui.newTask) setNt({ title: '', desc: '', projectId: ui.newTask.projectId || projects[0]?.id || '', assigneeId: me.user.id, due: addDays(today, 1), priority: 'Medium' }); }, [ui.newTask]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (ui.newTask) setNt({ title: '', desc: '', projectId: ui.newTask.projectId || projects[0]?.id || '', assigneeId: ui.newTask.assigneeId || me.user.id, due: addDays(today, 1), priority: 'Medium' }); }, [ui.newTask]); // eslint-disable-line react-hooks/exhaustive-deps
   if (!ui.newTask) return null;
   const close = () => setUi({ newTask: null });
   const ppl = [...people.values()].filter(p => p.status === 'Active' && (has('task.assign') || p.id === me.user.id));

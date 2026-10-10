@@ -4,12 +4,12 @@ import type { Meeting, Project, Task } from './types';
 
 export const MOD_OF_SCREEN: Record<string, string | null> = {
   mywork: null, tasks: 'tasks', meetings: null, approvals: 'approvals', pipeline: 'crm', projects: 'projects', project: 'projects',
-  settings: null, catalog: 'sales', credits: 'billing', customers: 'crm', customer: 'crm', quotes: 'sales', quote: 'sales',
+  settings: null, team: null, person: null, catalog: 'sales', credits: 'billing', customers: 'crm', customer: 'crm', quotes: 'sales', quote: 'sales',
   invoices: 'billing', invoice: 'billing', payments: 'payments', assets: 'assets', reports: 'reports', qeditor: 'sales', ieditor: 'billing',
 };
 export const SCREENS: Record<string, { title: string; group: string }> = {
   mywork: { title: 'My Work', group: 'Home' }, tasks: { title: 'Tasks', group: 'Work' }, meetings: { title: 'Meetings', group: 'Work' },
-  approvals: { title: 'Approvals', group: 'Work' }, pipeline: { title: 'Pipeline', group: 'Sales' }, projects: { title: 'Projects', group: 'Delivery' },
+  approvals: { title: 'Approvals', group: 'Work' }, team: { title: 'Team', group: 'Work' }, person: { title: 'Profile', group: 'Work · Team' }, pipeline: { title: 'Pipeline', group: 'Sales' }, projects: { title: 'Projects', group: 'Delivery' },
   project: { title: 'Project', group: 'Delivery' }, settings: { title: 'Settings', group: 'Organisation' }, catalog: { title: 'Catalogue', group: 'Sales' },
   credits: { title: 'Credit notes', group: 'Finance' }, customers: { title: 'Customers', group: 'Sales' }, customer: { title: 'Customer', group: 'Sales · Customers' },
   quotes: { title: 'Quotations', group: 'Sales' }, quote: { title: 'Quotation', group: 'Sales · Quotations' }, invoices: { title: 'Invoices', group: 'Finance' },
@@ -22,7 +22,7 @@ export function screenOf(path: string): { screen: string; id?: string } {
   const p = path.split('?')[0].split('/').filter(Boolean);
   if (!p.length) return { screen: 'mywork' };
   const [a, b, c] = p;
-  const detail: Record<string, string> = { projects: 'project', customers: 'customer', quotes: 'quote', invoices: 'invoice' };
+  const detail: Record<string, string> = { team: 'person', projects: 'project', customers: 'customer', quotes: 'quote', invoices: 'invoice' };
   if (a === 'quotes' && (b === 'new' || c === 'edit')) return { screen: 'qeditor', id: b === 'new' ? undefined : b };
   if (a === 'invoices' && (b === 'new' || c === 'edit')) return { screen: 'ieditor', id: b === 'new' ? undefined : b };
   if (b && detail[a]) return { screen: detail[a], id: b };

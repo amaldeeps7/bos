@@ -82,7 +82,7 @@ function TaskPanelInner({ t }: { t: Task }) {
             <input type="date" value={t.due} onChange={e => e.target.value && patch({ due: e.target.value })} aria-label="Change due date" style={{ height: 30, border: '1px solid #e2e8f0', borderRadius: 8, padding: '0 6px', fontSize: 13, color: '#64748b', background: '#fff' }} />
           </span>
           <span style={{ color: '#64748b' }}>Reported by</span>
-          <span>{person(t.reporterId).name}</span>
+          <button onClick={() => { setUi({ taskId: null }); router.push(`/team/${t.reporterId}`); }} style={{ justifySelf: 'start', border: 0, background: 'none', padding: 0, fontSize: 14, color: '#0052ff', cursor: 'pointer' }}>{person(t.reporterId).name}</button>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           <h3 style={{ margin: 0, fontSize: 14, fontWeight: 600 }}>Description</h3>
@@ -168,7 +168,7 @@ function MeetingPanelInner({ m }: { m: Meeting }) {
           <div>{pr ? <button onClick={() => { close(); router.push(`/projects/${pr.id}`); }} style={{ border: 0, background: 'none', padding: 0, fontSize: 14, color: '#0052ff', cursor: 'pointer', textAlign: 'left' }}>{pr.name} · {pr.customer}</button> : <span style={{ color: '#64748b' }}>Internal — no project</span>}</div>
           <span style={{ color: '#64748b', alignSelf: 'start', paddingTop: 4 }}>Attendees</span>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-            {m.attendees.map(w => { const p = person(w); return <span key={w} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, height: 30, padding: '0 10px 0 4px', border: '1px solid #e2e8f0', borderRadius: 999, fontSize: 13 }}><Avatar name={p.name} size={22} style={{ fontSize: 10 }} />{w === me.user.id ? 'You' : p.name}</span>; })}
+            {m.attendees.map(w => { const p = person(w); return <button key={w} onClick={() => { close(); router.push(`/team/${w}`); }} className="chip-link" title={`Open ${p.name}’s profile`} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, height: 30, padding: '0 10px 0 4px', border: '1px solid #e2e8f0', borderRadius: 999, background: '#fff', fontSize: 13, cursor: 'pointer', color: '#0f172a' }}><Avatar name={p.name} size={22} style={{ fontSize: 10 }} />{w === me.user.id ? 'You' : p.name}</button>; })}
             {(m.guests || []).map(g => <span key={g} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, height: 30, padding: '0 10px', border: '1px solid #e2e8f0', background: '#f8fafc', color: '#334155', borderRadius: 999, fontSize: 13 }}><Icon name="mail" size={13} />{g}</span>)}
             {m.ext && <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, height: 30, padding: '0 10px', border: '1px solid rgba(0,82,255,.18)', background: '#eef4ff', color: '#0052ff', borderRadius: 999, fontSize: 13 }}><Icon name="building" size={13} />{m.ext}</span>}
             {!past && <button onClick={() => setUi({ meetId: null, meetDialog: meetDraftOf(m) })} className="outline-blue" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, height: 30, padding: '0 10px', border: '1px dashed #cbd5e1', borderRadius: 999, background: '#fff', color: '#64748b', fontSize: 13, cursor: 'pointer' }}><Icon name="user-plus" size={13} />Add people</button>}

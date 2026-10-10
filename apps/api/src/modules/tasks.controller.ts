@@ -5,6 +5,8 @@ import { PrismaService } from '../core/prisma.service';
 import { AccessService } from '../core/access.service';
 import { NotifyService } from '../core/notify.service';
 import { OrgService } from '../core/org.service';
+import { MailService, htmlOf } from '../core/mail.service';
+import { prefsOf } from './team.controller';
 import { Me, Perm } from '../core/decorators';
 import type { AuthUser } from '../core/auth.types';
 import { d, oneOf, str, toDate } from '../core/util';
@@ -26,7 +28,7 @@ export const mapTask = (t: TaskRow, meId: string, today: string) => {
 
 @Controller('tasks')
 export class TasksController {
-  constructor(private prisma: PrismaService, private notify: NotifyService, private orgs: OrgService) {}
+  constructor(private prisma: PrismaService, private notify: NotifyService, private orgs: OrgService, private mail: MailService) {}
 
   private where(me: AuthUser): Prisma.TaskWhereInput {
     return AccessService.has(me, 'task.read_all') ? {} : { OR: [{ assigneeId: me.id }, { reporterId: me.id }] };
@@ -93,6 +95,13 @@ export class TasksController {
     const text = str(b.text, 'Comment', { required: true, max: 5000 }).trim();
     await this.prisma.taskEvent.create({ data: { taskId: id, userId: me.id, kind: 'comment', text } });
     await this.notify.send([t.assigneeId, t.reporterId], 'icon-message-square', `${me.name.split(' ')[0]} commented on ${t.title}`, '/tasks', me.id);
+    // email people who have "Comments and mentions" switched on
+    const to = await this.prisma.user.findMany({ where: { id: { in: [t.assigneeId, t.reporterId].filter(x => x && x !== me.id) as string[] }, status: 'Active' } });
+    const emails = to.filter(u => prefsOf(u.prefs).mention).map(u => u.email);
+    if (emails.length) {
+      const body = `${me.name} commented on “${t.title}” (TSK-${t.key}):\n\n${text}\n\nOpen it: ${(process.env.WEB_ORIGIN || 'http://localhost:3000').split(',')[0]}/tasks`;
+      await this.mail.send({ to: emails, subject: `${me.name.split(' ')[0]} commented on ${t.title}`, text: body, html: htmlOf(body), replyTo: me.email, kind: 'comment', ref: id, userId: me.id });
+    }
     return this.out(me, id);
   }
 

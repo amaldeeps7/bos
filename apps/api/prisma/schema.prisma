@@ -74,6 +74,18 @@ model User {
   inviteExpiry DateTime?
   lastActiveAt DateTime?
   createdAt    DateTime  @default(now())
+  // Team directory and profile
+  dept         String    @default("")
+  managerId    String?
+  manager      User?     @relation("Reports", fields: [managerId], references: [id], onDelete: SetNull)
+  reports      User[]    @relation("Reports")
+  phone        String    @default("")
+  location     String    @default("")
+  hours        String    @default("9:30 am – 6:30 pm")
+  joinedAt     DateTime?
+  leaveUntil   DateTime? @db.Date
+  calendar     Boolean   @default(true) // receive meeting invites as calendar events
+  prefs        Json      @default("{\"remind\": true, \"mention\": true, \"digest\": true}")
 
   unitsHeaded     BusinessUnit[] @relation("UnitHead")
   customersOwned  Customer[]

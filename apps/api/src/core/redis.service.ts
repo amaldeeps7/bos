@@ -38,5 +38,15 @@ export class RedisService implements OnModuleDestroy {
     if (!this.client || !this.up) return 0;
     try { const n = await this.client.incr(key); if (n === 1) await this.client.expire(key, windowSec); return n; } catch { return 0; }
   }
+  private seen = new Map<string, number>();
+  /** True the first time `key` is claimed within `ttlSec` (across API instances when Redis is up). */
+  async once(key: string, ttlSec: number): Promise<boolean> {
+    if (this.client && this.up) {
+      try { return (await this.client.set(key, '1', 'EX', ttlSec, 'NX')) === 'OK'; } catch { /* fall through */ }
+    }
+    const now = Date.now(); for (const [k, exp] of this.seen) if (exp < now) this.seen.delete(k);
+    if (this.seen.has(key)) return false;
+    this.seen.set(key, now + ttlSec * 1000); return true;
+  }
   async onModuleDestroy() { await this.client?.quit().catch(() => undefined); }
 }

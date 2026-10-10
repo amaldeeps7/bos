@@ -40,7 +40,10 @@ export class MeetingsController {
     const users = await this.prisma.user.findMany({ where: { id: { in: m.attendees.map(a => a.userId) } } });
     const organizer = (await this.prisma.user.findUnique({ where: { id: m.organizerId } })) || { name: me.name, email: me.email };
     const everyone = [...users.map(u => ({ name: u.name, email: u.email })), ...m.guests.map(email => ({ email }))];
-    const to = only ? [...users.filter(u => only.userIds.includes(u.id)).map(u => u.email), ...only.guests] : everyone.map(a => a.email).filter(e => e !== organizer.email);
+    // colleagues who disconnected their calendar on their profile don't get invite emails
+    const cal = users.filter(u => u.calendar);
+    const to = only ? [...cal.filter(u => only.userIds.includes(u.id)).map(u => u.email), ...only.guests]
+      : [...cal.map(u => u.email), ...m.guests].filter(e => e !== organizer.email);
     if (!to.length) return { ok: true, count: 0 };
     const ics = meetingIcs({ ...m, date: d(m.date) }, org.tz, organizer, everyone, method);
     const when = `${dayLabel(d(m.date), today)}, ${fmtT(m.start)} – ${fmtT(m.start + m.dur)} (${org.tz})`;

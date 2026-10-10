@@ -46,7 +46,7 @@ pnpm --filter @bos/shared build && pnpm --filter @bos/shared test   # GST, numbe
 pnpm --filter @bos/api test     # API end-to-end against Postgres (re-seeds the database)
 ```
 
-The API suite covers sign-in, permission enforcement on the API, module switches, GST by place of supply, the milestone → invoice → approval → issue → payment flow, discount-policy routing, GSTIN validation, forward-only numbering, PDF rendering, the email log, adding and inviting people, meeting guests, permission-aware search, and editing projects, milestones and deals.
+The API suite covers sign-in, permission enforcement on the API, module switches, GST by place of supply, the milestone → invoice → approval → issue → payment flow, discount-policy routing, GSTIN validation, forward-only numbering, PDF rendering, the email log, adding and inviting people, the org chart, profile permissions and reporting loops, notification switches, meeting reminders and the daily digest, meeting guests, permission-aware search, and editing projects, milestones and deals.
 
 ## How it works
 
@@ -60,6 +60,8 @@ The API suite covers sign-in, permission enforcement on the API, module switches
 - **PDFs** for quotations, invoices and credit notes are drawn on the server from Settings → Templates: layout, accent colour, logo, SAC column, bank details, a UPI QR code for the balance due, signatory line, amount in words and terms.
 - **Search (⌘K / Ctrl K, or `/`)** looks across customers, projects, tasks, meetings, quotations, invoices, payments, credit notes, deals, assets and people — by name, document number, `TSK-123`, GSTIN or bank reference — and only returns what the searcher's role can see. With an empty box it offers quick actions and every page.
 - **People.** Admins can add someone directly with a password they set (optionally sending a welcome email), or invite by email: the invitee gets a 7-day link to choose their own password. Names, job titles, roles and passwords can be changed later.
+- **Team.** An org chart built from each person's manager, and a searchable directory, both showing who is available, in a meeting right now, or on leave. A profile shows contact details, reporting line, direct reports and the projects someone works on, with Schedule meeting and Assign task. People edit their own phone, location, working hours and leave dates; anyone with `user.manage` also sets title, team, manager and joining date (reporting loops are refused). Names elsewhere in the app (meeting attendees, task reporters, project people, search results) open the profile.
+- **Your settings** (on your own profile, reached from your name at the bottom of the sidebar or the avatar on mobile): turn calendar invites on or off, meeting reminders (emailed and notified 10 minutes before, with the join link), comment emails on your tasks, and the 8:30 am daily digest of meetings, due tasks and approvals. Reminders and the digest run inside the API once a minute; Redis makes sure each goes out once even with several API instances. Set `SCHEDULER=off` to disable them. Sign out is here too.
 - **Assistant.** Suggested questions are answered from live records by the API. Free-text questions go to Claude (`claude-opus-5-5`, server-side refusal fallback enabled) when `ANTHROPIC_API_KEY` is set; otherwise the assistant says so.
 
 ## Where things are
@@ -72,6 +74,8 @@ The API suite covers sign-in, permission enforcement on the API, module switches
 | Dialogs (meeting, task, customer, payment, credit note) | `apps/web/src/components/dialogs.tsx` |
 | Quotation / invoice view and editor | `apps/web/src/components/docs.tsx` |
 | Settings (all sections, permission matrix, email log) | `apps/web/src/components/settings.tsx` |
+| Team, profiles, your settings | `apps/web/src/app/(app)/team/`, `apps/web/src/components/team.tsx`, `apps/api/src/modules/team.controller.ts` |
+| Meeting reminders and daily digest | `apps/api/src/modules/scheduler.service.ts` |
 | Edit dialogs (project, milestone, deal, asset, payment, person) | `apps/web/src/components/forms.tsx` |
 | ⌘K search | `apps/web/src/components/search.tsx`, `apps/api/src/modules/search.controller.ts` |
 | Email, PDFs, calendar invites | `apps/api/src/core/mail.service.ts`, `apps/api/src/core/pdf.service.ts`, `apps/api/src/core/ics.ts`, `apps/api/src/modules/documents.service.ts` |
@@ -84,6 +88,7 @@ The API suite covers sign-in, permission enforcement on the API, module switches
 - After the working day ends, "New meeting" proposes tomorrow's first free slot, and "Plan" says there's no free hour left instead of booking one in the past.
 - Due dates can be changed from the task panel (the prototype showed them read-only).
 - The Project manager role can add people (`user.manage`) in freshly seeded databases. In a database seeded before this change, grant it in Settings → Roles & permissions.
-- Reminders are sent when someone clicks "Send reminder" or "Remind overdue customers"; the schedule in Settings → Reminders isn't run automatically yet.
+- The profile's "Google Calendar" row is labelled Calendar: connecting it means meeting invites arrive as calendar events by email (which Google Calendar, Outlook and Apple Calendar pick up), not a two-way sync with Google.
+- Payment reminders are sent when someone clicks "Send reminder" or "Remind overdue customers"; the schedule in Settings → Reminders isn't run automatically yet.
 - Meeting invites are sent as calendar emails rather than through a two-way Google/Outlook calendar sync.
 - One organisation per deployment.

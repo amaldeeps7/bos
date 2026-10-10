@@ -21,7 +21,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const app = useApp(); const { me, ui, setUi, can, has, isMobile, wide, today, now } = app;
   const router = useRouter(); const path = usePathname();
   const { screen } = screenOf(path);
-  const parent: Record<string, string> = { project: 'projects', customer: 'customers', quote: 'quotes', invoice: 'invoices', qeditor: 'quotes', ieditor: 'invoices' };
+  const parent: Record<string, string> = { person: 'team', project: 'projects', customer: 'customers', quote: 'quotes', invoice: 'invoices', qeditor: 'quotes', ieditor: 'invoices' };
   const canSettings = has('settings.manage') || has('role.manage');
   const allowed = can(MOD_OF_SCREEN[screen] ?? null) && (screen !== 'settings' || canSettings) && (screen !== 'qeditor' || has('quote.create')) && (screen !== 'ieditor' || has('invoice.create'));
   useEffect(() => { if (!allowed) router.replace('/'); }, [allowed, router]);
@@ -40,7 +40,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const go = (href: string) => { setUi({ notifOpen: false, aiOpen: isMobile ? false : ui.aiOpen }); router.push(href); document.querySelector('main')?.scrollTo(0, 0); };
   const item = (id: string, href: string, label: string, icon: string, count?: number) => ({ id, href, label, icon, count, active: screen === id || parent[screen] === id });
   const groups = [
-    { label: '', items: [item('mywork', '/', 'My Work', 'icon-house'), can('tasks') && item('tasks', '/tasks', 'Tasks', 'icon-list-checks'), item('meetings', '/meetings', 'Meetings', 'icon-calendar'), can('approvals') && item('approvals', '/approvals', 'Approvals', 'icon-badge-check', waiting)] },
+    { label: '', items: [item('mywork', '/', 'My Work', 'icon-house'), can('tasks') && item('tasks', '/tasks', 'Tasks', 'icon-list-checks'), item('meetings', '/meetings', 'Meetings', 'icon-calendar'), item('team', '/team', 'Team', 'icon-users'), can('approvals') && item('approvals', '/approvals', 'Approvals', 'icon-badge-check', waiting)] },
     { label: 'Sales', items: [can('crm') && item('customers', '/customers', 'Customers', 'icon-building-2'), can('crm') && item('pipeline', '/pipeline', 'Pipeline', 'icon-kanban'), can('sales') && item('quotes', '/quotes', 'Quotations', 'icon-scroll-text'), can('sales') && item('catalog', '/catalog', 'Catalogue', 'icon-package')] },
     { label: 'Delivery', items: [can('projects') && item('projects', '/projects', 'Projects', 'icon-folder-kanban'), can('assets') && item('assets', '/assets', 'Assets', 'icon-laptop')] },
     { label: 'Finance', items: [can('billing') && item('invoices', '/invoices', 'Invoices', 'icon-file-text'), can('billing') && item('credits', '/credit-notes', 'Credit notes', 'icon-receipt'), can('payments') && item('payments', '/payments', 'Payments', 'icon-wallet')] },
@@ -52,7 +52,8 @@ export function AppShell({ children }: { children: ReactNode }) {
     can('projects') && item('projects', '/projects', 'Projects', 'icon-folder-kanban'), can('approvals') && item('approvals', '/approvals', 'Approvals', 'icon-badge-check', waiting)].filter(Boolean) as ReturnType<typeof item>[];
 
   const orgIni = me.org.name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
-  const logout = async () => { await fetch('/api/auth/logout', { method: 'POST' }); location.href = '/login'; };
+  const myIni = me.user.name.split(' ').map(w => w[0]).join('').slice(0, 2);
+  const onMe = screen === 'person' && screenOf(path).id === me.user.id;
 
   return (
     <div style={{ height: '100vh', background: '#fafafa' }}>
@@ -81,14 +82,14 @@ export function AppShell({ children }: { children: ReactNode }) {
               ))}
             </div>
             <div style={{ flex: 'none', borderTop: '1px solid #e2e8f0', padding: 12 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 8px' }}>
-                <span style={{ width: 32, height: 32, borderRadius: 999, background: '#f1f5f9', color: '#64748b', fontSize: 13, fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{me.user.name.split(' ').map(w => w[0]).join('').slice(0, 2)}</span>
-                <span style={{ minWidth: 0, flex: 1 }}>
+              <button onClick={() => go(`/team/${me.user.id}`)} title="Your profile" className={onMe ? '' : 'hov-soft'} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 10, padding: '6px 8px', border: 0, borderRadius: 8, cursor: 'pointer', background: onMe ? '#f1f5f9' : 'transparent' }}>
+                <span style={{ width: 32, height: 32, flex: 'none', borderRadius: 999, background: '#f1f5f9', color: '#64748b', fontSize: 13, fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{myIni}</span>
+                <span style={{ minWidth: 0, flex: 1, textAlign: 'left' }}>
                   <span style={{ display: 'block', fontSize: 14, fontWeight: 500, lineHeight: 1.2 }}>{me.user.name}</span>
                   <span style={{ display: 'block', fontSize: 13, color: '#64748b', lineHeight: 1.3 }}>{ui.viewAs || me.user.roleName}</span>
                 </span>
-                <button onClick={logout} className="ghost-icon" title="Sign out" aria-label="Sign out" style={{ width: 32, height: 32 }}><Icon name="log-out" size={16} /></button>
-              </div>
+                <Icon name="chevron-right" size={15} style={{ color: '#94a3b8' }} />
+              </button>
             </div>
           </nav>
         )}
@@ -116,7 +117,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                 <Icon name="sparkles" size={16} />{!isMobile && <span>Assistant</span>}
               </button>
             )}
-            {isMobile && <button onClick={logout} className="ghost-icon" aria-label="Sign out" style={{ width: 36, height: 36 }}><Icon name="log-out" size={17} /></button>}
+            {isMobile && <button onClick={() => go(`/team/${me.user.id}`)} aria-label="Your profile" style={{ width: 36, height: 36, flex: 'none', border: '1px solid #e2e8f0', borderRadius: 999, background: '#f1f5f9', color: '#475569', fontSize: 12, fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{myIni}</button>}
             {ui.notifOpen && (
               <div style={{ position: 'absolute', top: 58, right: 16, width: 340, maxWidth: 'calc(100% - 32px)', background: '#fff', border: '1px solid #e2e8f0', borderRadius: 12, boxShadow: '0 16px 48px -12px rgba(15,23,42,.2),0 4px 12px -4px rgba(15,23,42,.08)', overflow: 'hidden' }}>
                 <div style={{ padding: '12px 16px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>

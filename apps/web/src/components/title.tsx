@@ -2,7 +2,7 @@
 import { usePathname } from 'next/navigation';
 import { useQ } from '@/lib/app';
 import { SCREENS, screenOf } from '@/lib/domain';
-import type { Customer, Invoice, Project, Quote } from '@/lib/types';
+import type { Customer, Invoice, Profile, Project, Quote } from '@/lib/types';
 
 /** The current screen's title — the record's name or number on detail screens. */
 export function useTitle() {
@@ -11,7 +11,9 @@ export function useTitle() {
   const customers = useQ<Customer[]>(screen === 'customer' ? 'customers' : null).data;
   const quotes = useQ<Quote[]>(screen === 'quote' || screen === 'qeditor' ? 'quotes' : null).data;
   const invoices = useQ<Invoice[]>(screen === 'invoice' || screen === 'ieditor' ? 'invoices' : null).data;
+  const person = useQ<Profile>(screen === 'person' && id ? `team/${id}` : null).data;
   let title = SCREENS[screen]?.title || 'My Work';
+  if (screen === 'person') title = person?.name || title;
   if (screen === 'project') title = projects?.find(p => p.id === id)?.name || title;
   if (screen === 'customer') title = customers?.find(c => c.id === id)?.name || title;
   if (screen === 'quote') title = quotes?.find(q => q.id === id)?.no || title;

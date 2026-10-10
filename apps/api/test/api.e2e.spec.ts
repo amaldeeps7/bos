@@ -162,3 +162,82 @@ describe('documents, email, people and search', () => {
     await request(app.getHttpServer()).delete(`/api/opportunities/${deal.body.id}`).set('Cookie', pm).expect(200);
   });
 });
+
+describe('team and profiles', () => {
+  const http = () => request(app.getHttpServer());
+  const idOf = async (cookie: string[]) => (await http().get('/api/auth/me').set('Cookie', cookie)).body.user.id as string;
+
+  it('lists the org chart with reporting lines and availability', async () => {
+    const field = await login('arjun@democonsulting.in');
+    const team = (await http().get('/api/team').set('Cookie', field).expect(200)).body;
+    expect(team.map((t: any) => t.name)).not.toContain('Kavya Menon'); // invited, not signed in yet: not on the chart
+    const by = (n: string) => team.find((t: any) => t.name === n);
+    expect(by('Anand Iyer').managerId).toBeNull();
+    expect(by('Arjun Mehta').managerId).toBe(by('Priya Raman').id);
+    expect(by('Meera Nair').status).toBe('leave');
+    expect(by('Meera Nair').statusText).toMatch(/^On leave until /);
+  });
+
+  it('shows a profile; only you see your settings', async () => {
+    const pm = await login('priya@democonsulting.in'); const me = await idOf(pm);
+    const mine = (await http().get(`/api/team/${me}`).set('Cookie', pm).expect(200)).body;
+    expect(mine.isMe).toBe(true); expect(mine.prefs).toEqual({ remind: true, mention: true, digest: true });
+    expect(mine.reports.map((r: any) => r.name)).toEqual(['Arjun Mehta', 'Dev Khanna']);
+    expect(mine.projects.length).toBeGreaterThan(0);
+    const field = await login('arjun@democonsulting.in');
+    const seen = (await http().get(`/api/team/${me}`).set('Cookie', field).expect(200)).body;
+    expect(seen.prefs).toBeUndefined(); expect(seen.canEdit).toBe(false);
+  });
+
+  it('lets people edit their own contact details, and only admins the reporting line', async () => {
+    const field = await login('arjun@democonsulting.in'); const arjun = await idOf(field);
+    await http().patch(`/api/team/${arjun}`).set('Cookie', field).send({ phone: '+91 90000 00001', leaveUntil: '2030-01-05' }).expect(200);
+    await http().patch(`/api/team/${arjun}`).set('Cookie', field).send({ title: 'CTO' }).expect(403);
+    const pm = await login('priya@democonsulting.in'); const priya = await idOf(pm);
+    await http().patch(`/api/team/${priya}`).set('Cookie', field).send({ phone: 'x' }).expect(403);
+    const owner = await login('anand@democonsulting.in');
+    await http().patch(`/api/team/${priya}`).set('Cookie', owner).send({ managerId: arjun }).expect(400); // Arjun reports to Priya: a loop
+    await http().patch(`/api/team/${arjun}`).set('Cookie', owner).send({ dept: 'Platform', title: 'Staff engineer' }).expect(200);
+    const p = (await http().get(`/api/team/${arjun}`).set('Cookie', owner)).body;
+    expect([p.phone, p.dept, p.title, p.status]).toEqual(['+91 90000 00001', 'Platform', 'Staff engineer', 'leave']);
+    await http().patch(`/api/team/${arjun}`).set('Cookie', field).send({ leaveUntil: '' }).expect(200);
+  });
+
+  it('honours notification and calendar switches', async () => {
+    const { PrismaService } = await import('../src/core/prisma.service');
+    const prisma = app.get(PrismaService);
+    const dev = await login('dev@democonsulting.in'); const devId = await idOf(dev);
+    await http().patch('/api/me/prefs').set('Cookie', dev).send({ mention: false, calendar: false }).expect(200);
+    // comment on a task Dev reported? use one assigned to Dev, by Priya
+    const pm = await login('priya@democonsulting.in');
+    const task = (await http().get('/api/tasks').set('Cookie', pm)).body.find((t: any) => t.assigneeId === devId);
+    const before = await prisma.emailLog.count({ where: { kind: 'comment' } });
+    await http().post(`/api/tasks/${task.id}/comments`).set('Cookie', pm).send({ text: 'Looks good' }).expect(201);
+    expect(await prisma.emailLog.count({ where: { kind: 'comment' } })).toBe(before); // Dev switched mentions off
+    const m = await http().post('/api/meetings').set('Cookie', pm).send({ title: 'Design review', date: '2030-02-01', start: 11, dur: 0.5, loc: 'Google Meet', attendees: [devId] }).expect(201);
+    expect(m.body.invited).toBe(0); // Dev disconnected their calendar
+    await http().patch('/api/me/prefs').set('Cookie', dev).send({ mention: true, calendar: true }).expect(200);
+  });
+
+  it('sends meeting reminders and the daily digest once, to people who want them', async () => {
+    const { PrismaService } = await import('../src/core/prisma.service');
+    const { SchedulerService } = await import('../src/modules/scheduler.service');
+    const { todayISO } = await import('@bos/shared');
+    const prisma = app.get(PrismaService); const sched = app.get(SchedulerService);
+    const dev = await login('dev@democonsulting.in'); const devId = await idOf(dev);
+    await http().patch('/api/me/prefs').set('Cookie', dev).send({ remind: false }).expect(200);
+    const today = todayISO('Asia/Kolkata');
+    const ist = (h: number, min: number) => new Date(Date.parse(today + 'T00:00:00Z') + ((h - 5.5) * 60 + min) * 60000);
+    // "Weekly status — Brightline Health" is today at 2:00 pm with Priya and Dev
+    await sched.tick(ist(13, 52)); await sched.tick(ist(13, 53));
+    const rem = await prisma.emailLog.findMany({ where: { kind: 'reminder-meeting', subject: { contains: 'Weekly status' } } });
+    expect(rem.map(r => r.to)).toEqual(['priya@democonsulting.in']);
+    expect(await prisma.notification.count({ where: { userId: devId, text: { contains: 'Weekly status' } } })).toBe(0);
+    await sched.tick(ist(8, 40)); await sched.tick(ist(8, 41));
+    const dig = await prisma.emailLog.findMany({ where: { kind: 'digest' } });
+    const to = dig.map(r => r.to);
+    expect(to.filter(t => t === 'priya@democonsulting.in')).toHaveLength(1);
+    expect(to).not.toContain('meera@democonsulting.in'); // on leave
+    await http().patch('/api/me/prefs').set('Cookie', dev).send({ remind: true }).expect(200);
+  });
+});
