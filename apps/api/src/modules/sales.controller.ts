@@ -1,7 +1,7 @@
 import { BadRequestException, Body, Controller, Delete, ForbiddenException, Get, HttpCode, NotFoundException, Param, Patch, Post, Res } from '@nestjs/common';
 import type { Response } from 'express';
 import { DocumentsService, mailNote } from './documents.service';
-import { placeOf, STAGES, UNISSUED } from '@bos/shared';
+import { diffDays, placeOf, STAGES, UNISSUED } from '@bos/shared';
 import { PrismaService } from '../core/prisma.service';
 import { OrgService } from '../core/org.service';
 import { AccessService } from '../core/access.service';
@@ -25,15 +25,16 @@ export class CustomersController {
       this.prisma.customer.findMany({ where: { archived: false }, orderBy: { since: 'asc' } }),
       this.prisma.invoice.findMany(), this.prisma.project.groupBy({ by: ['customerId'], _count: true }),
     ]);
-    const owed = new Map<string, number>(), billed = new Map<string, number>();
+    const owed = new Map<string, number>(), billed = new Map<string, number>(), late30 = new Set<string>();
     for (const i of invoices) {
       const f = this.fin.invInfo(i, c);
+      if (f.overdue && diffDays(c.today, d(i.due)) > 30) late30.add(i.customerId);
       owed.set(i.customerId, (owed.get(i.customerId) || 0) + f.bal);
       if (!UNISSUED.includes(i.status)) billed.set(i.customerId, (billed.get(i.customerId) || 0) + f.k.grand);
     }
     const pc = new Map(projects.map(p => [p.customerId, p._count]));
     return rows.map(x => ({ id: x.id, name: x.name, gstin: x.gstin || '', state: placeOf(x) || '', stateCode: x.state, city: x.city, contact: x.contact, email: x.email, phone: x.phone,
-      terms: x.terms, ownerId: x.ownerId, since: d(x.since), outstanding: owed.get(x.id) || 0, billed: billed.get(x.id) || 0, projects: pc.get(x.id) || 0, intra: placeOf(x) === c.ourState }));
+      terms: x.terms, ownerId: x.ownerId, since: d(x.since), outstanding: owed.get(x.id) || 0, billed: billed.get(x.id) || 0, projects: pc.get(x.id) || 0, intra: placeOf(x) === c.ourState, overdue30: late30.has(x.id) }));
   }
 
   @Post() @Perm('customer.create')

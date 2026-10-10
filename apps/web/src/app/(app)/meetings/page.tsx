@@ -1,5 +1,6 @@
 'use client';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { DAYS, dayLabel, diffDays, fmtD, fmtT, hm } from '@bos/shared';
 import { useAct, useApp, useQ } from '@/lib/app';
 import { isNow, isPast } from '@/lib/domain';
@@ -9,7 +10,7 @@ import { meetDraftOf, useOpenNewMeeting } from '@/components/dialogs';
 import { openLink } from '@/components/overlays';
 import { ExportBtn } from '@/components/export-btn';
 
-type Tab = 'upcoming' | 'past' | 'follow';
+type Tab = 'upcoming' | 'past' | 'follow' | 'cancelled';
 const LOC_ICON: Record<string, string> = { 'Google Meet': 'icon-video', Zoom: 'icon-video', 'Microsoft Teams': 'icon-video', 'Customer site': 'icon-map-pin' };
 
 export default function Meetings() {
@@ -18,10 +19,13 @@ export default function Meetings() {
   const projects = useQ<Project[]>('projects').data || [];
   const newMeeting = useOpenNewMeeting();
   const [tab, setTab] = useState<Tab>('upcoming');
+  const params = useSearchParams(); useEffect(() => { const t = params.get('tab'); if (t === 'cancelled' || t === 'past' || t === 'follow') setTab(t); }, [params]);
+  // Cancelled meetings (last 90 days) are kept for the record, outside the main list.
+  const cancelled = useQ<(Meeting & { cancelledAt: string })[]>('meetings/cancelled').data || [];
   const past = (m: Meeting) => isPast(m, today, now);
-  const defs: Record<Tab, (m: Meeting) => boolean> = { upcoming: m => !past(m), past, follow: m => past(m) && m.actions.some(a => !a.taskId) };
+  const defs: Record<Exclude<Tab, 'cancelled'>, (m: Meeting) => boolean> = { upcoming: m => !past(m), past, follow: m => past(m) && m.actions.some(a => !a.taskId) };
   const ord = (m: Meeting) => m.date + String(m.start).padStart(5, '0');
-  const list = meetings.filter(defs[tab]).sort((a, b) => (tab === 'upcoming' ? ord(a).localeCompare(ord(b)) : ord(b).localeCompare(ord(a))));
+  const list = (tab === 'cancelled' ? cancelled : meetings.filter(defs[tab])).sort((a, b) => (tab === 'upcoming' ? ord(a).localeCompare(ord(b)) : ord(b).localeCompare(ord(a))));
   const days = [...new Set(list.map(m => m.date))];
   const wd = (d: string) => DAYS[new Date(d + 'T00:00:00Z').getUTCDay()];
   const cancel = async (m: Meeting) => { if (!confirm(`Cancel “${m.title}”? Attendees will be notified.`)) return; const r = await act(`meetings/${m.id}`, undefined, { method: 'DELETE', quiet: true }); if (r) toast(`“${m.title}” cancelled. Attendees notified.`); };
@@ -30,7 +34,8 @@ export default function Meetings() {
     <PageHead title="Meetings" sub={`${meetings.filter(m => !past(m)).length} upcoming · ${meetings.filter(defs.follow).length} need follow-up`} right={<div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
       <ExportBtn name="meetings" rows={() => list.map(m => ({ Title: m.title, Date: m.date, Start: hm(m.start), Minutes: Math.round(m.dur * 60), Project: projects.find(p => p.id === m.projectId)?.name || '', Organiser: person(m.organizerId).name, Attendees: m.attendees.map(a => person(a).name).concat(m.guests).join('; '), Location: m.loc || m.link, 'Open actions': m.actions.filter(a => !a.taskId).length }))} />
       <Btn kind="pri" icon="plus" onClick={() => newMeeting()}>New meeting</Btn></div>} />
-    <Tabs tabs={([['upcoming', 'Upcoming'], ['past', 'Past'], ['follow', 'Needs follow-up']] as [Tab, string][]).map(([id, label]) => ({ id, label, count: meetings.filter(defs[id]).length }))} value={tab} onChange={setTab} />
+    <Tabs tabs={([['upcoming', 'Upcoming'], ['past', 'Past'], ['follow', 'Needs follow-up'], ['cancelled', 'Cancelled']] as [Tab, string][]).map(([id, label]) => ({ id, label, count: id === 'cancelled' ? cancelled.length : meetings.filter(defs[id]).length }))} value={tab} onChange={setTab} />
+    {tab === 'cancelled' && !list.length && <Card style={{ padding: '28px 20px', textAlign: 'center', color: '#64748b', fontSize: 14 }}>No meetings cancelled in the last 90 days.</Card>}
     <Card style={{ overflow: 'hidden' }}>
       {days.map(d => {
         const rows = list.filter(m => m.date === d); const off = diffDays(d, today);
@@ -41,8 +46,8 @@ export default function Meetings() {
               <span style={{ fontSize: 13, color: '#94a3b8' }}>{rows.length} meeting{rows.length > 1 ? 's' : ''}</span>
             </div>
             {rows.map(m => {
-              const pr = projects.find(p => p.id === m.projectId); const ps = past(m); const live = isNow(m, today, now); const open = m.actions.filter(a => !a.taskId).length;
-              const tag: [string, any] | null = live ? ['In progress', 'success'] : ps ? (open ? [`${open} action item${open > 1 ? 's' : ''} open`, 'warning'] : m.notes ? ['Notes', 'neutral'] : ['No notes', 'neutral']) : null;
+              const pr = projects.find(p => p.id === m.projectId); const off_ = tab === 'cancelled'; const ps = off_ || past(m); const live = !off_ && isNow(m, today, now); const open = m.actions.filter(a => !a.taskId).length;
+              const tag: [string, any] | null = off_ ? ['Cancelled', 'danger'] : live ? ['In progress', 'success'] : ps ? (open ? [`${open} action item${open > 1 ? 's' : ''} open`, 'warning'] : m.notes ? ['Notes', 'neutral'] : ['No notes', 'neutral']) : null;
               return (
                 <div key={m.id} style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '10px 16px', padding: '14px 20px', borderBottom: '1px solid #f1f5f9' }}>
                   <div style={{ display: 'flex', alignItems: 'flex-start', gap: 16, flex: '1 1 320px', minWidth: 0 }}>
@@ -50,7 +55,7 @@ export default function Meetings() {
                       <p className="num" style={{ margin: 0, fontSize: 14, fontWeight: 600, color: ps ? '#94a3b8' : '#0f172a' }}>{fmtT(m.start)}</p>
                       <p style={{ margin: '2px 0 0', fontSize: 12.5, color: '#94a3b8' }}>{hm(m.dur)}</p>
                     </div>
-                    <button onClick={() => setUi({ meetId: m.id, taskId: null })} style={{ flex: 1, minWidth: 0, textAlign: 'left', border: 0, background: 'none', padding: 0, cursor: 'pointer' }}>
+                    <button onClick={() => !off_ && setUi({ meetId: m.id, taskId: null })} style={{ flex: 1, minWidth: 0, textAlign: 'left', border: 0, background: 'none', padding: 0, cursor: off_ ? 'default' : 'pointer' }}>
                       <p style={{ margin: 0, fontSize: 15, fontWeight: 500, color: ps ? '#475569' : '#0f172a' }}>{m.title}</p>
                       <p style={{ margin: '3px 0 0', fontSize: 13, color: '#64748b', display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '0 6px' }}><span>{pr ? `${pr.name} · ${pr.customer}` : 'Internal'}</span><span>·</span><span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}><Icon name={LOC_ICON[m.loc] || 'icon-building'} size={13} />{m.loc}</span></p>
                     </button>

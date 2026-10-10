@@ -34,7 +34,7 @@ export class SearchController {
       const rows = await this.prisma.task.findMany({ where: { AND: [scope, { OR: [{ title: I(q) }, { desc: I(q) }, ...(taskNo ? [{ key: +taskNo }] : [])] }] }, include: { project: true, assignee: true }, orderBy: [{ status: 'asc' }, { due: 'asc' }], take });
       return rows.map(t => ({ type: 'task', id: t.id, title: t.title, sub: `TSK-${t.key} · ${t.project.name} · ${t.assignee.name}${t.status === 'done' ? ' · Done' : ` · due ${fmtD(d(t.due))}`}`, open: 'task' as const }));
     });
-    add('meeting', 'Meetings', async () => (await this.prisma.meeting.findMany({ where: { AND: [{ OR: [{ organizerId: me.id }, { attendees: { some: { userId: me.id } } }] }, { OR: [{ title: I(q) }, { agenda: I(q) }, { notes: I(q) }, { ext: I(q) }] }] }, orderBy: { date: 'desc' }, take }))
+    add('meeting', 'Meetings', async () => (await this.prisma.meeting.findMany({ where: { cancelledAt: null, AND: [{ OR: [{ organizerId: me.id }, { attendees: { some: { userId: me.id } } }] }, { OR: [{ title: I(q) }, { agenda: I(q) }, { notes: I(q) }, { ext: I(q) }] }] }, orderBy: { date: 'desc' }, take }))
       .map(m => ({ type: 'meeting', id: m.id, title: m.title, sub: `${fmtD(d(m.date))} · ${m.loc}`, open: 'meeting' as const })));
     if (has('quote.read')) add('quote', 'Quotations', async () => (await this.prisma.quote.findMany({ where: { OR: [{ no: I(q) }, { title: I(q) }, { customer: { name: I(q) } }] }, include: { customer: true }, orderBy: { date: 'desc' }, take }))
       .map(x => ({ type: 'quote', id: x.id, title: `${x.no} · ${x.title}`, sub: `${x.customer.name} · ${x.status.replace('_', ' ').toLowerCase()}`, href: `/quotes/${x.id}` })));

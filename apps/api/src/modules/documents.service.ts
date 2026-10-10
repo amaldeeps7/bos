@@ -83,13 +83,16 @@ export class DocumentsService {
   }
 
   /** Payment reminder using Settings → Reminders wording, with the invoice attached. */
-  async emailReminder(id: string, userId: string | undefined, ccOwner = false) {
+  /** `cc`: true or 'owner' copies the customer's account owner; 'finance' copies the owner and everyone in Finance. */
+  async emailReminder(id: string, userId: string | undefined, cc: boolean | 'owner' | 'finance' = false) {
     const { buffer, filename, i, bal } = await this.invoicePdf(id); const { c, templates } = await this.base();
     const rem = c.org.reminders as any;
     const vars = { number: i.no, customer: i.customer.name, amount: inr(bal), due: fmtD(d(i.due)), contact: i.customer.contact.split(',')[0] || 'there' };
     const text = fill(rem.body, vars);
-    const owner = ccOwner ? await this.prisma.membership.findUnique({ where: { id: i.customer.ownerId } }) : null;
-    return this.mail.send({ to: i.customer.email, cc: owner ? [owner.email] : undefined, subject: fill(rem.subject, vars), text, html: htmlOf(text, templates.invoice.accent), attachments: [{ filename, content: buffer, contentType: 'application/pdf' }], kind: 'reminder', ref: i.no, userId });
+    const owner = cc ? await this.prisma.membership.findUnique({ where: { id: i.customer.ownerId } }) : null;
+    const finance = cc === 'finance' ? await this.prisma.membership.findMany({ where: { status: 'Active', role: { name: 'Finance' } } }) : [];
+    const copies = [...new Set([owner?.email, ...finance.map(f => f.email)].filter((x): x is string => !!x))];
+    return this.mail.send({ to: i.customer.email, cc: copies.length ? copies : undefined, subject: fill(rem.subject, vars), text, html: htmlOf(text, templates.invoice.accent), attachments: [{ filename, content: buffer, contentType: 'application/pdf' }], kind: 'reminder', ref: i.no, userId });
   }
 
   async emailCredit(id: string, userId: string) {

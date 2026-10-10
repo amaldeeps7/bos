@@ -11,8 +11,15 @@ import { ExportService, orgDir } from './export.service';
 import { runAs } from '../core/tenant';
 import { promises as fs } from 'fs';
 import { QueueService } from '../core/queue.service';
+import { FinanceService } from './finance.service';
+import { DocumentsService } from './documents.service';
+import { AuditService } from '../core/audit.service';
+import { diffDays } from '@bos/shared';
 
 const DIGEST_AT = 8.5; // 8:30 am, organisation time
+const CHASE_AT = 9; // payment reminders go out from 9 am, organisation time
+/** Settings → Reminders steps, in order: days relative to the due date. */
+export const REMINDER_DAYS = [-3, 0, 7, 15, 30];
 const REMIND_MIN = 10;
 
 /**
@@ -24,7 +31,8 @@ const REMIND_MIN = 10;
 @Injectable()
 export class SchedulerService implements OnModuleInit {
   private log = new Logger('Scheduler');
-  constructor(private prisma: PrismaService, private redis: RedisService, private notify: NotifyService, private orgs: OrgService, private mail: MailService, private exports: ExportService, private queue: QueueService) {}
+  constructor(private prisma: PrismaService, private redis: RedisService, private notify: NotifyService, private orgs: OrgService, private mail: MailService, private exports: ExportService, private queue: QueueService,
+    private fin: FinanceService, private docs: DocumentsService, private audit: AuditService) {}
 
   onModuleInit() {
     this.queue.handle('tick', () => this.tick());
@@ -42,6 +50,7 @@ export class SchedulerService implements OnModuleInit {
           const now = nowHours(org.tz, at);
           await this.reminders(today, now);
           if (now >= DIGEST_AT && now < DIGEST_AT + 1) await this.digests(today, org.tz);
+          if (now >= CHASE_AT) await this.paymentReminders(today);
           await this.exports.expire();
         }).catch(e => this.log.warn(`${o.id}: ${(e as Error).message}`));
       }
@@ -66,7 +75,7 @@ export class SchedulerService implements OnModuleInit {
 
   async reminders(today: string, now: number) {
     const soon = await this.prisma.meeting.findMany({
-      where: { date: toDate(today), start: { gt: now, lte: now + REMIND_MIN / 60 } },
+      where: { cancelledAt: null, date: toDate(today), start: { gt: now, lte: now + REMIND_MIN / 60 } },
       include: { attendees: { include: { user: true } } },
     });
     for (const m of soon) {
@@ -81,13 +90,38 @@ export class SchedulerService implements OnModuleInit {
     }
   }
 
+  /**
+   * Settings → Reminders: emails the customer at each switched-on step (3 days before the due date, on it,
+   * then 7, 15 and 30 days late), once per invoice and step. If a step was missed (the app was down), the latest
+   * step due is sent within a week, never a burst of several. A part payment pauses reminders for 7 days.
+   */
+  async paymentReminders(today: string) {
+    const c = await this.fin.ctx(); const rem = c.org.reminders as { stopPartial?: boolean; steps?: { on: boolean }[] };
+    const steps = rem.steps || [];
+    if (!steps.some(s => s.on)) return;
+    const invs = await this.prisma.invoice.findMany({ where: { status: { in: ['ISSUED', 'SENT', 'PARTIALLY_PAID'] } }, include: { customer: true, allocations: { include: { payment: true } } } });
+    for (const i of invs) {
+      if (!i.customer.email || this.fin.invInfo(i, c).bal <= 0) continue;
+      const late = diffDays(today, d(i.due));
+      const idx = REMINDER_DAYS.map((days, n) => (steps[n]?.on && late >= days && late - days <= 7 ? n : -1)).filter(n => n >= 0).pop();
+      if (idx === undefined) continue;
+      if (rem.stopPartial && i.allocations.some(a => diffDays(today, d(a.payment.date)) < 7)) continue;
+      // Claim this step (once across instances), and the earlier ones so a late start doesn't send several at once.
+      if (!(await this.redis.once(`bos:payrem:${i.id}:${idx}`, 120 * 86400))) continue;
+      for (let n = 0; n < idx; n++) await this.redis.once(`bos:payrem:${i.id}:${n}`, 120 * 86400);
+      const r = await this.docs.emailReminder(i.id, undefined, idx === 4 ? 'finance' : idx === 3 ? 'owner' : false);
+      const when = late < 0 ? `${-late} days before the due date` : late === 0 ? 'on the due date' : `${late} days overdue`;
+      await this.audit.log({ id: '', name: 'Business OS' }, `${r.ok ? 'Sent' : 'Could not send'} an automatic payment reminder for ${i.no} to ${i.customer.name} (${when})`, 'icon-bell-ring', 'invoice');
+    }
+  }
+
   async digests(today: string, tz: string) {
     const users = await this.prisma.membership.findMany({ where: { status: 'Active' } });
     for (const u of users) {
       if (!prefsOf(u.prefs).digest || (u.leaveUntil && d(u.leaveUntil) >= today)) continue;
       if (!(await this.redis.once(`bos:digest:${today}:${u.id}`, 2 * 86400))) continue;
       const [meetings, tasks, approvals] = await Promise.all([
-        this.prisma.meeting.findMany({ where: { date: toDate(today), OR: [{ organizerId: u.id }, { attendees: { some: { userId: u.id } } }] }, orderBy: { start: 'asc' } }),
+        this.prisma.meeting.findMany({ where: { cancelledAt: null, date: toDate(today), OR: [{ organizerId: u.id }, { attendees: { some: { userId: u.id } } }] }, orderBy: { start: 'asc' } }),
         this.prisma.task.findMany({ where: { assigneeId: u.id, status: { not: 'done' }, due: { lte: toDate(addDays(today, 0)) } }, orderBy: { due: 'asc' } }),
         this.prisma.approval.count({ where: { approverId: u.id, status: 'PENDING' } }),
       ]);

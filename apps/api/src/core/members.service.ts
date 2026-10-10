@@ -84,6 +84,6 @@ export class MembersService {
     if (n > 1) throw new ForbiddenException(`${m.name} also belongs to another organisation, so only they can change their password.`);
     const org = await this.org(); const min = Number((org.security as any).pwd) || 12;
     if (password.length < min) throw new BadRequestException(`The password must be at least ${min} characters.`);
-    await this.prisma.account.update({ where: { id: m.accountId }, data: { passwordHash: await bcrypt.hash(password, 10) } });
+    await this.prisma.account.update({ where: { id: m.accountId }, data: { passwordHash: await bcrypt.hash(password, 10), sessionVersion: { increment: 1 } } });
   }
 }

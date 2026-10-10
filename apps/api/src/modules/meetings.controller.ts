@@ -55,7 +55,7 @@ export class MeetingsController {
   }
 
   private async get(me: AuthUser, id: string) {
-    const m = await this.prisma.meeting.findFirst({ where: { id, OR: [{ organizerId: me.id }, { attendees: { some: { userId: me.id } } }] }, include });
+    const m = await this.prisma.meeting.findFirst({ where: { id, cancelledAt: null, OR: [{ organizerId: me.id }, { attendees: { some: { userId: me.id } } }] }, include });
     if (!m) throw new NotFoundException('Meeting not found');
     return m;
   }
@@ -78,8 +78,15 @@ export class MeetingsController {
 
   @Get()
   async list(@Me() me: AuthUser) {
-    const rows = await this.prisma.meeting.findMany({ where: { OR: [{ organizerId: me.id }, { attendees: { some: { userId: me.id } } }] }, include, orderBy: [{ date: 'asc' }, { start: 'asc' }] });
+    const rows = await this.prisma.meeting.findMany({ where: { cancelledAt: null, OR: [{ organizerId: me.id }, { attendees: { some: { userId: me.id } } }] }, include, orderBy: [{ date: 'asc' }, { start: 'asc' }] });
     return rows.map(map);
+  }
+
+  /** Meetings cancelled in the last 90 days, kept for the record. */
+  @Get('cancelled')
+  async cancelled(@Me() me: AuthUser) {
+    const rows = await this.prisma.meeting.findMany({ where: { cancelledAt: { gte: new Date(Date.now() - 90 * 86400_000) }, OR: [{ organizerId: me.id }, { attendees: { some: { userId: me.id } } }] }, include, orderBy: { cancelledAt: 'desc' } });
+    return rows.map(m => ({ ...map(m), cancelledAt: m.cancelledAt!.toISOString() }));
   }
 
   @Post()
@@ -130,8 +137,9 @@ export class MeetingsController {
   async cancel(@Me() me: AuthUser, @Param('id') id: string) {
     const m = await this.get(me, id);
     await this.invite({ ...m, sequence: m.sequence + 1 }, me, 'CANCEL');
-    await this.prisma.meeting.delete({ where: { id } });
-    await this.notify.send(m.attendees.map(a => a.userId), 'icon-calendar-x', `${m.title} was cancelled`, '/meetings', me.id);
+    // Kept, marked cancelled: it drops off calendars and reminders but stays in the history.
+    await this.prisma.meeting.update({ where: { id }, data: { cancelledAt: new Date(), sequence: m.sequence + 1 } });
+    await this.notify.send(m.attendees.map(a => a.userId), 'icon-calendar-x', `${m.title} was cancelled`, '/meetings?tab=cancelled', me.id);
     return { ok: true };
   }
 

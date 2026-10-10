@@ -4,6 +4,7 @@ import { PrismaService } from './prisma.service';
 import { RedisService } from './redis.service';
 import type { AuthUser } from './auth.types';
 import { mfaRequired } from './mfa';
+import { sessionTtl } from './session.service';
 import { orgId, Scope } from './tenant';
 
 /** Loads a user's effective access (role permissions + switched-on modules), cached in Redis. */
@@ -15,7 +16,7 @@ export class AccessService {
   async load(membershipId: string, accountId: string): Promise<AuthUser | null> {
     const o = orgId();
     const [u, org] = await Promise.all([
-      this.prisma.membership.findUnique({ where: { id: membershipId } }),
+      this.prisma.membership.findUnique({ where: { id: membershipId }, include: { account: { select: { sessionVersion: true } } } }),
       this.prisma.organization.findUnique({ where: { id: o } }),
     ]);
     if (!u || u.status !== 'Active' || u.accountId !== accountId || !org || org.status !== 'active') return null;
@@ -23,7 +24,8 @@ export class AccessService {
     const modules = await this.modules();
     const scope: Scope = role.builtIn || !u.scope ? { all: true } : (u.scope as unknown as Scope);
     return { id: u.id, accountId: u.accountId, orgId: o, name: u.name, email: u.email, title: u.title, roleId: u.roleId, roleName: role.name, builtIn: role.builtIn,
-      perms: role.perms, modules, scope, demo: org.demo && process.env.DEMO_MODE === 'true', mfa: mfaRequired(org, role.name) };
+      perms: role.perms, modules, scope, demo: org.demo && process.env.DEMO_MODE === 'true', mfa: mfaRequired(org, role.name),
+      sv: u.account.sessionVersion, ttl: sessionTtl(org.security) };
   }
 
   async role(roleId: string): Promise<{ name: string; builtIn: boolean; perms: string[] }> {

@@ -31,7 +31,8 @@ export class TasksController {
   constructor(private prisma: PrismaService, private notify: NotifyService, private orgs: OrgService, private mail: MailService) {}
 
   private where(me: AuthUser): Prisma.TaskWhereInput {
-    return AccessService.has(me, 'task.read_all') ? {} : { OR: [{ assigneeId: me.id }, { reporterId: me.id }] };
+    // Your own tasks, plus every task on projects you own (so a project's owner sees the whole project).
+    return AccessService.has(me, 'task.read_all') ? {} : { OR: [{ assigneeId: me.id }, { reporterId: me.id }, { project: { ownerId: me.id } }] };
   }
   private async get(me: AuthUser, id: string) {
     const t = await this.prisma.task.findFirst({ where: { id, ...this.where(me) }, include });
@@ -111,7 +112,7 @@ export class TasksController {
     const t = await this.get(me, id);
     const { today, org } = await this.orgs.ctx();
     const busy = [
-      ...(await this.prisma.meeting.findMany({ where: { date: toDate(today), attendees: { some: { userId: me.id } } } })),
+      ...(await this.prisma.meeting.findMany({ where: { cancelledAt: null, date: toDate(today), attendees: { some: { userId: me.id } } } })),
       ...(await this.prisma.timeBlock.findMany({ where: { userId: me.id, date: toDate(today) } })),
     ];
     const now = nowHours(org.tz); let start = -1;

@@ -343,7 +343,6 @@ function Security({ s }: { s: Settings }) {
       <CardHead title="Sign-in" />
       {t('mfaAll', 'Require two-factor sign-in for everyone', `A code from an authenticator app at every sign-in. Anyone without it sets it up next time they sign in.${me.demo ? ' Not enforced in the sample workspace.' : ''}`)}
       {t('mfaFin', 'Always require two-factor for Owner and Finance', 'Applies even when the rule above is off. Lost phone? An admin can reset it from Users.')}
-      {t('ssoGoogle', 'Allow sign-in with Google Workspace', 'Only for addresses on the allowed domains below.')}
       {t('newDevice', 'Email people when they sign in from a new device', '')}
     </Card>
     <Card>
@@ -531,7 +530,7 @@ function Reminders({ s }: { s: Settings }) {
   const patch = (b: object) => act('settings/reminders', b, { method: 'PATCH', quiet: true });
   return <>
     <Card>
-      <CardHead title="Payment reminders" sub="Sent automatically to the customer's billing email, with the invoice attached." />
+      <CardHead title="Payment reminders" sub="Sent automatically from 9 am to the customer's billing email, with the invoice attached. Each step goes once per invoice; switched-off steps are skipped." />
       {r.steps.map((x: any, i: number) => <ToggleRow key={i} label={x.label} desc={x.desc} on={x.on} onClick={() => patch({ steps: r.steps.map((y: any, j: number) => (j === i ? { ...y, on: !y.on } : y)) })} />)}
       <ToggleRow label="Pause reminders when a part payment arrives" desc="They resume if the rest is still unpaid 7 days later." on={r.stopPartial} onClick={() => patch({ stopPartial: !r.stopPartial })} style={{ background: '#f8fafc', borderBottom: 0, borderRadius: '0 0 12px 12px' }} />
     </Card>

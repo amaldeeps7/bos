@@ -24,7 +24,7 @@ export class TeamController {
   private async statuses() {
     const { org, today } = await this.orgs.ctx();
     const now = nowHours(org.tz);
-    const meetings = await this.prisma.meeting.findMany({ where: { date: toDate(today), start: { lte: now } }, include: { attendees: true } });
+    const meetings = await this.prisma.meeting.findMany({ where: { cancelledAt: null, date: toDate(today), start: { lte: now } }, include: { attendees: true } });
     const live = meetings.filter(m => now < m.start + m.dur);
     return (u: { id: string; leaveUntil: Date | null }) => {
       if (u.leaveUntil && d(u.leaveUntil) >= today) return { status: 'leave', statusLabel: 'On leave', statusText: `On leave until ${dayLabel(d(u.leaveUntil), today)}` };
@@ -52,7 +52,7 @@ export class TeamController {
     if (AccessService.has(me, 'project.read')) {
       const [tasks, meets, owned] = await Promise.all([
         this.prisma.task.findMany({ where: { assigneeId: id }, select: { projectId: true, status: true } }),
-        this.prisma.meeting.findMany({ where: { projectId: { not: null }, OR: [{ organizerId: id }, { attendees: { some: { userId: id } } }] }, select: { projectId: true } }),
+        this.prisma.meeting.findMany({ where: { cancelledAt: null, projectId: { not: null }, OR: [{ organizerId: id }, { attendees: { some: { userId: id } } }] }, select: { projectId: true } }),
         this.prisma.project.findMany({ where: { ownerId: id }, select: { id: true } }),
       ]);
       const ids = [...new Set([...tasks.map(t => t.projectId), ...meets.map(m => m.projectId!), ...owned.map(p => p.id)])];

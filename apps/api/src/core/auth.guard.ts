@@ -6,8 +6,10 @@ import { AccessService } from './access.service';
 import { IS_PUBLIC, PERMS } from './decorators';
 import type { TokenPayload } from './auth.types';
 import { tenant, tenantStore } from './tenant';
+import { SessionService } from './session.service';
 
-export const COOKIE = 'bos_token';
+import { COOKIE } from './cookies';
+export { COOKIE };
 
 /** Opens an empty tenant context for every request; AuthGuard fills it once the token is verified. */
 export class TenantMiddleware implements NestMiddleware {
@@ -21,7 +23,7 @@ export const tokenOf = (req: any): string => {
 
 @Injectable()
 export class AuthGuard implements CanActivate {
-  constructor(private reflector: Reflector, private jwt: JwtService, private access: AccessService) {}
+  constructor(private reflector: Reflector, private jwt: JwtService, private access: AccessService, private session: SessionService) {}
 
   async canActivate(ctx: ExecutionContext): Promise<boolean> {
     const targets = [ctx.getHandler(), ctx.getClass()];
@@ -43,9 +45,16 @@ export class AuthGuard implements CanActivate {
       if (isPublic) return true;
       throw new UnauthorizedException('You no longer have access to this organisation');
     }
+    // Signed out on that device, or everywhere (password change, "sign out everywhere"), since this token was issued.
+    if ((p.sv ?? 0) !== user.sv || (await this.session.isRevoked(p.sid))) {
+      Object.assign(c, { orgId: undefined, membershipId: undefined });
+      if (isPublic) return true;
+      throw new UnauthorizedException('You were signed out. Sign in again.');
+    }
     c.scope = user.scope;
-    user.otp = !!p.amr?.includes('otp');
+    user.otp = !!p.amr?.includes('otp'); user.sid = p.sid;
     req.user = user;
+    await this.session.refresh(req, ctx.switchToHttp().getResponse(), p, user.ttl || 8 * 3600);
     // Policy says two-factor and this session didn't pass it (signed in before the rule, or before enrolling): sign in again.
     if (user.mfa && !user.otp && !isPublic) throw new UnauthorizedException({ statusCode: 401, code: 'mfa_required', message: 'Your organisation requires two-factor sign-in. Sign in again to set it up.' });
     const need = this.reflector.getAllAndOverride<string[]>(PERMS, targets) || [];

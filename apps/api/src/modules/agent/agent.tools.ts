@@ -139,7 +139,7 @@ export class AgentTools {
       }
       case 'my_day': {
         const [meetings, tasks, approvals] = await Promise.all([
-          p.meeting.findMany({ where: { date: toDate(today), OR: [{ organizerId: me.id }, { attendees: { some: { userId: me.id } } }] }, orderBy: { start: 'asc' }, include: { project: true } }),
+          p.meeting.findMany({ where: { cancelledAt: null, date: toDate(today), OR: [{ organizerId: me.id }, { attendees: { some: { userId: me.id } } }] }, orderBy: { start: 'asc' }, include: { project: true } }),
           p.task.findMany({ where: { assigneeId: me.id, status: { not: 'done' }, due: { lte: toDate(today) } }, include: { project: true }, orderBy: { due: 'asc' } }),
           p.approval.findMany({ where: { approverId: me.id, status: 'PENDING' } }),
         ]);
@@ -189,7 +189,7 @@ export class AgentTools {
       }
       case 'list_meetings': {
         const who = await this.person(i.person); const from = i.from_day ?? 0, to = i.to_day ?? 7;
-        const rows = await p.meeting.findMany({ where: { date: { gte: toDate(addDays(today, from)), lte: toDate(addDays(today, to)) }, OR: [{ organizerId: who.id }, { attendees: { some: { userId: who.id } } }] },
+        const rows = await p.meeting.findMany({ where: { cancelledAt: null, date: { gte: toDate(addDays(today, from)), lte: toDate(addDays(today, to)) }, OR: [{ organizerId: who.id }, { attendees: { some: { userId: who.id } } }] },
           include: { attendees: { include: { user: true } }, project: true }, orderBy: [{ date: 'asc' }, { start: 'asc' }] });
         return { content: j({ person: who.name, meetings: rows.map(m => ({ id: m.id, title: m.title, date: d(m.date), time: `${fmtT(m.start)}–${fmtT(m.start + m.dur)}`, where: m.loc, project: m.project?.name, attendees: m.attendees.map(a => a.user.name) })) }) };
       }
@@ -197,7 +197,7 @@ export class AgentTools {
         const now = nowHours(this.tz);
         const [people, live, tasks] = await Promise.all([
           p.membership.findMany({ where: { status: 'Active' }, include: { manager: true } }),
-          p.meeting.findMany({ where: { date: toDate(today), start: { lte: now } }, include: { attendees: true } }),
+          p.meeting.findMany({ where: { cancelledAt: null, date: toDate(today), start: { lte: now } }, include: { attendees: true } }),
           this.has('task.read_all') ? p.task.findMany({ where: { status: { not: 'done' } }, select: { assigneeId: true, due: true } }) : Promise.resolve([]),
         ]);
         const busy = live.filter(m => now < m.start + m.dur);

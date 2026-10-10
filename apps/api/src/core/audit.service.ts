@@ -8,6 +8,6 @@ export type AuditArea = 'invoice' | 'quote' | 'payment' | 'access' | 'settings' 
 export class AuditService {
   constructor(private prisma: PrismaService) {}
   async log(who: { id: string; name: string }, text: string, icon = 'icon-settings-2', area: AuditArea = 'settings') {
-    await this.prisma.auditLog.create({ data: { userId: who.id, who: who.name, text, icon, area } });
+    await this.prisma.auditLog.create({ data: { userId: who.id || null, who: who.name, text, icon, area } });
   }
 }

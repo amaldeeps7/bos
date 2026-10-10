@@ -24,7 +24,7 @@ export interface Meeting { id: string; title: string; date: string; start: numbe
 export interface Approval { id: string; kind: string; docType: string | null; docId: string | null; ref: string; title: string; detail: string; amount: number | null; by: string; approver: string; age: string; status: 'waiting' | 'sent' | 'approved' | 'rejected' }
 export interface Milestone { id: string; seq: number; name: string; pct: number; value: number; status: string; due: string; changedAt: string | null }
 export interface Project { id: string; name: string; code: string; customerId: string; customer: string; bu: string; contract: number; endDate: string; health: string; status: string; ownerId: string; quoteId: string | null; createdAt: string; milestones: Milestone[] }
-export interface Customer { id: string; name: string; gstin: string; state: string; stateCode: string; city: string; contact: string; email: string; phone: string; terms: number; ownerId: string; since: string; outstanding: number; billed: number; projects: number; intra: boolean }
+export interface Customer { id: string; name: string; gstin: string; state: string; stateCode: string; city: string; contact: string; email: string; phone: string; terms: number; ownerId: string; since: string; outstanding: number; billed: number; projects: number; intra: boolean; overdue30?: boolean }
 export interface Opportunity { id: string; name: string; customerId: string; customer: string; value: number; ownerId: string; stage: number; next: string }
 export interface CatalogItem { id: string; d: string; sac: string; unit: string; rate: number }
 interface DocApproval { id: string; approverId: string; approverName: string }

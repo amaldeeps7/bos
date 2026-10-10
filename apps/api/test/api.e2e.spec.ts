@@ -720,3 +720,124 @@ describe('security basics', () => {
     } finally { process.env = env; }
   });
 });
+
+describe('everyday fixes', () => {
+  const http = () => request(app.getHttpServer());
+  const DEMO = 'org_7f3k2q9xw1';
+
+  it('sends the payment reminder schedule automatically, once per step', async () => {
+    const { SchedulerService } = await import('../src/modules/scheduler.service');
+    const { runAs } = await import('../src/core/tenant');
+    const { todayISO } = await import('@bos/shared');
+    const sched = app.get(SchedulerService); const today = todayISO('Asia/Kolkata');
+    await db.emailLog.deleteMany({ where: { kind: 'reminder' } }); await app.get(RedisService).delPattern('bos:payrem:*');
+    // INV-2026-0131 is due in 10 days: nothing yet. Make it due in 3 days, the first step.
+    await runAs({ orgId: DEMO, scope: { all: true } }, () => sched.paymentReminders(today));
+    expect(await db.emailLog.count({ where: { kind: 'reminder', orgId: DEMO } })).toBe(0);
+    const inv = await db.invoice.findFirstOrThrow({ where: { orgId: DEMO, no: 'INV-2026-0131' } });
+    await db.invoice.update({ where: { id: inv.id }, data: { due: new Date(Date.parse(today) + 3 * 86400_000) } });
+    await runAs({ orgId: DEMO, scope: { all: true } }, () => sched.paymentReminders(today));
+    const sent = await db.emailLog.findMany({ where: { kind: 'reminder', orgId: DEMO } });
+    expect(sent.map(m => m.ref)).toEqual(['INV-2026-0131']);
+    const audit = await db.auditLog.findMany({ where: { orgId: DEMO, text: { contains: 'automatic payment reminder' } } });
+    expect(audit.length).toBe(sent.length); expect(audit[0].userId).toBeNull();
+    // Running again (the next minute, or on another instance) sends nothing new.
+    await runAs({ orgId: DEMO, scope: { all: true } }, () => sched.paymentReminders(today));
+    expect(await db.emailLog.count({ where: { kind: 'reminder', orgId: DEMO } })).toBe(sent.length);
+    await db.invoice.update({ where: { id: inv.id }, data: { due: inv.due } });
+  });
+
+  it('keeps cancelled meetings as history instead of deleting them', async () => {
+    const pm = await login('priya@democonsulting.in');
+    const m = (await http().post('/api/meetings').set('Cookie', pm).send({ title: 'To be cancelled', date: '2026-12-01', start: 11, dur: 0.5, loc: 'Google Meet', attendees: [] }).expect(201)).body;
+    await http().delete(`/api/meetings/${m.id}`).set('Cookie', pm).expect(200);
+    expect((await http().get('/api/meetings').set('Cookie', pm)).body.find((x: any) => x.id === m.id)).toBeUndefined();
+    const c = (await http().get('/api/meetings/cancelled').set('Cookie', pm).expect(200)).body.find((x: any) => x.id === m.id);
+    expect(c.title).toBe('To be cancelled'); expect(c.cancelledAt).toBeTruthy();
+    await http().patch(`/api/meetings/${m.id}`).set('Cookie', pm).send({ title: 'x' }).expect(404); // can't edit a cancelled meeting
+  });
+});
+
+describe('sessions and passwords', () => {
+  const http = () => request(app.getHttpServer());
+  const cookieOf = (r: any) => r.headers['set-cookie'] as unknown as string[];
+  const signIn = (email: string, password = 'demo1234', extra: Record<string, string> = {}) =>
+    http().post('/api/auth/login').set('X-Forwarded-For', `10.77.${Math.floor(Math.random() * 250)}.${Math.floor(Math.random() * 250)}`).set(extra).send({ email, password, org: 'democonsulting' });
+
+  it('signs out on the server: a signed-out cookie stops working, and other devices can be signed out', async () => {
+    const a = cookieOf(await signIn('rohan@democonsulting.in').expect(200));
+    const b = cookieOf(await signIn('rohan@democonsulting.in').expect(200));
+    const list = (await http().get('/api/auth/sessions').set('Cookie', a).expect(200)).body;
+    expect(list.filter((s: any) => s.current)).toHaveLength(1); expect(list.length).toBeGreaterThanOrEqual(2);
+    await http().post('/api/auth/logout').set('Cookie', b).expect(200);
+    await http().get('/api/auth/me').set('Cookie', b).expect(401); // the copied cookie is dead
+    const c = cookieOf(await signIn('rohan@democonsulting.in').expect(200));
+    const cId = (await http().get('/api/auth/sessions').set('Cookie', c)).body.find((s: any) => s.current).id;
+    await http().post(`/api/auth/sessions/${cId}/revoke`).set('Cookie', a).expect(200);
+    await http().get('/api/auth/me').set('Cookie', c).expect(401);
+    const d = cookieOf(await signIn('rohan@democonsulting.in').expect(200));
+    const keep = await http().post('/api/auth/sessions/revoke-others').set('Cookie', a).expect(200);
+    await http().get('/api/auth/me').set('Cookie', d).expect(401);
+    await http().get('/api/auth/me').set('Cookie', cookieOf(keep)).expect(200); // this device stays signed in
+  });
+
+  it('keeps an active session alive: the cookie is renewed as you use the app', async () => {
+    const { JwtService } = await import('@nestjs/jwt');
+    const jwt = app.get(JwtService);
+    const a = cookieOf(await signIn('rohan@democonsulting.in').expect(200));
+    const token = a[0].split(';')[0].split('=')[1];
+    const p: any = jwt.decode(token);
+    const { exp: _e, ...rest } = p; const old = await jwt.signAsync({ ...rest, iat: Math.floor(Date.now() / 1000) - 600 }, { expiresIn: 1800 });
+    const r = await http().get('/api/auth/me').set('Cookie', `bos_token=${old}`).expect(200);
+    expect(cookieOf(r)?.[0]).toMatch(/^bos_token=/); // renewed
+    const fresh = await http().get('/api/auth/me').set('Cookie', a).expect(200);
+    expect(cookieOf(fresh)).toBeUndefined(); // not on every request
+  });
+
+  it('changes and resets passwords, signing other devices out', async () => {
+    const { MailService } = await import('../src/core/mail.service');
+    const mail = app.get(MailService); const sent: any[] = [];
+    const spy = jest.spyOn(mail, 'send').mockImplementation(async (m: any) => { sent.push(m); return { ok: true }; });
+    try {
+      const a = cookieOf(await signIn('dev@democonsulting.in').expect(200));
+      const other = cookieOf(await signIn('dev@democonsulting.in').expect(200));
+      await http().post('/api/auth/password').set('Cookie', a).send({ current: 'wrong', password: 'a-new-password-1' }).expect(400);
+      await http().post('/api/auth/password').set('Cookie', a).send({ current: 'demo1234', password: 'short' }).expect(400);
+      const ch = await http().post('/api/auth/password').set('Cookie', a).send({ current: 'demo1234', password: 'a-new-password-1' }).expect(200);
+      await http().get('/api/auth/me').set('Cookie', other).expect(401);
+      await http().get('/api/auth/me').set('Cookie', cookieOf(ch)).expect(200);
+      await signIn('dev@democonsulting.in').expect(401);
+      expect(sent.at(-1).subject).toBe('Your Business OS password was changed');
+
+      // Forgot: same answer whether or not the account exists; the link works once.
+      const none = await http().post('/api/auth/forgot').send({ email: 'nobody@nowhere.in' }).expect(200);
+      const yes = await http().post('/api/auth/forgot').send({ email: 'dev@democonsulting.in' }).expect(200);
+      expect(yes.body.message).toBe(none.body.message);
+      const link = sent.find(m => m.subject === 'Reset your Business OS password').text.match(/token=(\S+)/)[1];
+      await http().post('/api/auth/reset').send({ token: link, password: 'short' }).expect(400);
+      await http().post('/api/auth/reset').send({ token: link, password: 'demo1234-reset-ok' }).expect(200);
+      await http().post('/api/auth/reset').send({ token: link, password: 'demo1234-reset-2' }).expect(400); // used
+      await http().get('/api/auth/me').set('Cookie', cookieOf(ch)).expect(401); // every device signed out
+      await signIn('dev@democonsulting.in', 'demo1234-reset-ok').expect(200);
+    } finally {
+      spy.mockRestore();
+      await db.account.update({ where: { email: 'dev@democonsulting.in' }, data: { passwordHash: require('bcryptjs').hashSync('demo1234', 10) } });
+    }
+  });
+
+  it('emails people when they sign in from a new device (when the organisation asks for it)', async () => {
+    const { MailService } = await import('../src/core/mail.service');
+    const mail = app.get(MailService); const sent: any[] = [];
+    const spy = jest.spyOn(mail, 'send').mockImplementation(async (m: any) => { sent.push(m); return { ok: true }; });
+    try {
+      await app.get(RedisService).delPattern('bos:devices:*');
+      const first = await signIn('rohan@democonsulting.in').expect(200); // first device ever: no email
+      const device = cookieOf(first).find(c => c.startsWith('bos_device='))!.split(';')[0];
+      await signIn('rohan@democonsulting.in', 'demo1234', { Cookie: device }).expect(200); // same device: no email
+      expect(sent.filter(m => m.subject === 'New sign-in to Business OS')).toHaveLength(0);
+      await signIn('rohan@democonsulting.in', 'demo1234', { 'User-Agent': 'Mozilla/5.0 (iPhone) Safari/604.1' }).expect(200);
+      const n = sent.filter(m => m.subject === 'New sign-in to Business OS');
+      expect(n).toHaveLength(1); expect(n[0].text).toMatch(/Safari on iOS/);
+    } finally { spy.mockRestore(); }
+  });
+});

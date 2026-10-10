@@ -19,3 +19,9 @@ export async function api<T = any>(path: string, init: { method?: string; body?:
   }
   return data as T;
 }
+
+/** Signs out this device (the session ends on the server too) and goes to the sign-in page. */
+export async function signOut() {
+  try { await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' }); } catch { /* signed out locally anyway */ }
+  location.href = '/login';
+}

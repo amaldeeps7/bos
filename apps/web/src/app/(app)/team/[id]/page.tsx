@@ -8,6 +8,8 @@ import { Back, Badge, Btn, Card, CardHead, Icon, Switch } from '@/components/ui'
 import { useOpenNewMeeting } from '@/components/dialogs';
 import { Face, PersonLink, ProfileDialog, STATUS_TONE } from '@/components/team';
 import { MfaCard } from '@/components/mfa';
+import { PasswordCard, SessionsCard } from '@/components/account';
+import { signOut } from '@/lib/api';
 
 const tzShort = (tz: string) => { try { return new Intl.DateTimeFormat('en-IN', { timeZone: tz, timeZoneName: 'short' }).formatToParts(new Date()).find(p => p.type === 'timeZoneName')?.value || ''; } catch { return ''; } };
 const PREFS = [['remind', 'Meeting reminders', '10 minutes before, with the join link'], ['mention', 'Comments and mentions', 'When someone comments on your tasks'], ['digest', 'Daily digest', 'Your day at 8:30 am: meetings, due tasks, approvals']] as const;
@@ -23,7 +25,7 @@ export default function PersonPage() {
 
   const canAssign = can('tasks') && has('task.create');
   const tz = tzShort(me.org.tz);
-  const logout = async () => { await fetch('/api/auth/logout', { method: 'POST' }); location.href = '/login'; };
+  const logout = signOut;
   const field = (label: string, value: React.ReactNode) => (
     <div><p style={{ margin: 0, fontSize: 12.5, color: '#64748b' }}>{label}</p><div style={{ margin: '2px 0 0', overflow: 'hidden', textOverflow: 'ellipsis' }}>{value}</div></div>
   );
@@ -94,7 +96,7 @@ export default function PersonPage() {
         </Card>
       )}
 
-      {p.isMe && <MfaCard />}
+      {p.isMe && <><PasswordCard /><MfaCard /><SessionsCard /></>}
 
       {editing && <ProfileDialog p={p} onClose={() => setEditing(false)} />}
     </>

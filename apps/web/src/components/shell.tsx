@@ -1,5 +1,6 @@
 'use client';
 import { ReactNode, useEffect, useState } from 'react';
+import { signOut } from '@/lib/api';
 import { usePathname, useRouter } from 'next/navigation';
 import { diffDays } from '@bos/shared';
 import { useAct, useApp, useQ } from '@/lib/app';
@@ -95,8 +96,8 @@ export function AppShell({ children }: { children: ReactNode }) {
                 </div>
               ))}
             </div>
-            <div style={{ flex: 'none', borderTop: '1px solid #e2e8f0', padding: 12 }}>
-              <button onClick={() => go(`/team/${me.user.id}`)} title="Your profile" className={onMe ? '' : 'hov-soft'} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 10, padding: '6px 8px', border: 0, borderRadius: 8, cursor: 'pointer', background: onMe ? '#f1f5f9' : 'transparent' }}>
+            <div style={{ flex: 'none', borderTop: '1px solid #e2e8f0', padding: 12, display: 'flex', alignItems: 'center', gap: 4 }}>
+              <button onClick={() => go(`/team/${me.user.id}`)} title="Your profile" className={onMe ? '' : 'hov-soft'} style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 10, padding: '6px 8px', border: 0, borderRadius: 8, cursor: 'pointer', background: onMe ? '#f1f5f9' : 'transparent' }}>
                 <span style={{ width: 32, height: 32, flex: 'none', borderRadius: 999, background: '#f1f5f9', color: '#64748b', fontSize: 13, fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{myIni}</span>
                 <span style={{ minWidth: 0, flex: 1, textAlign: 'left' }}>
                   <span style={{ display: 'block', fontSize: 14, fontWeight: 500, lineHeight: 1.2 }}>{me.user.name}</span>
@@ -104,6 +105,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                 </span>
                 <Icon name="chevron-right" size={15} style={{ color: '#94a3b8' }} />
               </button>
+              <button onClick={() => void signOut()} title="Sign out" aria-label="Sign out" className="ghost-icon" style={{ width: 36, height: 36, flex: 'none' }}><Icon name="log-out" size={16} /></button>
             </div>
           </nav>
         )}
@@ -200,6 +202,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                   <button onClick={() => { setMore(false); setUi({ orgMenu: true }); }} aria-label="Switch organisation" className="hov-soft" style={{ flex: 'none', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 2, width: 76, border: '1px solid #e2e8f0', borderRadius: 12, background: '#fff', cursor: 'pointer', fontSize: 11, color: '#475569' }}>
                     <span style={{ width: 26, height: 26, borderRadius: 7, backgroundImage: 'linear-gradient(135deg,#0052ff,#4d7cff)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 600 }}>{orgIni}</span>Switch
                   </button>
+                  <button onClick={() => void signOut()} aria-label="Sign out" className="hov-soft" style={{ flex: 'none', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 4, width: 64, padding: 8, border: '1px solid #e2e8f0', borderRadius: 12, background: '#fff', color: '#475569', fontSize: 12, cursor: 'pointer' }}><Icon name="log-out" size={18} />Sign out</button>
                 </div>
                 {groups.map(g => (
                   <div key={g.label || 'home'} style={{ marginTop: 12 }}>

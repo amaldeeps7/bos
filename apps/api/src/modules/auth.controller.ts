@@ -18,6 +18,10 @@ import { codeStep, mfaRequired, newBackupCodes, newSecret, openSecret, otpauthUr
 import type { TokenPayload } from '../core/auth.types';
 import { Limit } from '../core/rate-limit';
 import { AuditService } from '../core/audit.service';
+import { MailService, htmlOf } from '../core/mail.service';
+import { createHash, randomBytes } from 'crypto';
+
+const sha = (t: string) => createHash('sha256').update(t).digest('hex');
 
 export const ini = (n: string) => n.split(/\s+/).filter(Boolean).map(w => w[0]).join('').slice(0, 2).toUpperCase();
 
@@ -32,14 +36,14 @@ export function planLabel(o: { plan: string; trialEndsAt: Date | null }) {
 
 @Controller('auth')
 export class AuthController {
-  constructor(private prisma: PrismaService, private session: SessionService, private redis: RedisService, private orgs: OrgService, private jwt: JwtService, private audit: AuditService) {}
+  constructor(private prisma: PrismaService, private session: SessionService, private redis: RedisService, private orgs: OrgService, private jwt: JwtService, private audit: AuditService, private mail: MailService) {}
 
   issue(res: Response, accountId: string, membershipId: string, org: { id: string; security: unknown }) { return this.session.issue(res, accountId, membershipId, org); }
 
   memberships(accountId: string) { return this.session.memberships(accountId); }
 
   @Public() @Post('login') @HttpCode(200) @Limit('login', 100, 600)
-  async login(@Body() body: any, @Res({ passthrough: true }) res: Response) {
+  async login(@Req() req: Request, @Body() body: any, @Res({ passthrough: true }) res: Response) {
     const email = str(body.email, 'Email', { required: true, max: 200 }).trim().toLowerCase();
     const password = str(body.password, 'Password', { required: true, max: 200 });
     if ((await this.redis.hit(`bos:login:${email}`, 300)) > 10) throw new HttpException('Too many attempts. Try again in a few minutes.', HttpStatus.TOO_MANY_REQUESTS);
@@ -53,6 +57,7 @@ export class AuthController {
     // Two-factor on, or required by the organisation: no session yet, just a ticket for the second step.
     const challenge = await this.session.enter(res, acc, pick.m, pick.org);
     if (challenge) return challenge;
+    await this.session.noteDevice(req, res, acc, pick.org);
     await runAs({ orgId: pick.org.id }, () => this.prisma.membership.update({ where: { id: pick.m.id }, data: { lastActiveAt: new Date() } }));
     return { ok: true, org: pick.org.slug };
   }
@@ -98,6 +103,7 @@ export class AuthController {
     const used = await this.check(acc, b.code);
     const { m, org } = await this.target(ticket!);
     await this.session.issue(res, acc.id, m.id, org, true);
+    await this.session.noteDevice(req, res, acc, org);
     await this.redis.del(`bos:mfa:${acc.id}`, `bos:login:${acc.email}`);
     return { ok: true, org: org.slug, ...(used.backup ? { message: `Signed in with a backup code. ${used.left} left — make new ones from your profile if you’re running low.` } : {}) };
   }
@@ -127,7 +133,7 @@ export class AuthController {
     if (ticket) { const { m, org } = await this.target(ticket); await this.session.issue(res, acc.id, m.id, org, true); }
     else if (me) {
       // Stay signed in, now with the second factor on this session.
-      await this.session.issue(res, acc.id, me.id, await this.prisma.organization.findUniqueOrThrow({ where: { id: me.orgId } }), true);
+      await this.session.issue(res, acc.id, me.id, await this.prisma.organization.findUniqueOrThrow({ where: { id: me.orgId } }), true, me.sid);
       await this.audit.log(me, `${me.name} turned on two-factor sign-in`, 'icon-shield-check', 'access');
     }
     return { ok: true, codes, message: 'Two-factor sign-in is on. Save your backup codes somewhere safe.' };
@@ -163,8 +169,102 @@ export class AuthController {
     return { ok: true, message: 'Two-factor sign-in is off.' };
   }
 
+  /** Ends this session on the server too, so a copied cookie stops working. */
   @Public() @Post('logout') @HttpCode(200)
-  logout(@Res({ passthrough: true }) res: Response) { res.clearCookie(COOKIE, { path: '/' }); return { ok: true }; }
+  async logout(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
+    const me = (req as any).user as AuthUser | undefined;
+    if (me?.sid) await this.session.revoke(me.accountId, me.sid);
+    res.clearCookie(COOKIE, { path: '/' }); return { ok: true };
+  }
+
+  // ── Sessions and passwords ───────────────────────────────────────────────────────
+
+  /** Where this account is signed in. */
+  @Get('sessions')
+  async sessions(@Me() me: AuthUser) {
+    return (await this.session.list(me.accountId)).map(s => ({ ...s, current: s.id === me.sid }));
+  }
+
+  /** Signs out one other device. */
+  @Post('sessions/:sid/revoke') @HttpCode(200)
+  async revokeSession(@Me() me: AuthUser, @Param('sid') sid: string) {
+    if (sid === me.sid) throw new BadRequestException('That’s this device. Use Sign out instead.');
+    if (!(await this.session.list(me.accountId)).some(s => s.id === sid)) throw new BadRequestException('That session has already ended.');
+    await this.session.revoke(me.accountId, sid);
+    return { message: 'That device is signed out.' };
+  }
+
+  /** Signs out every other device; this one stays signed in. */
+  @Post('sessions/revoke-others') @HttpCode(200)
+  async revokeOthers(@Me() me: AuthUser, @Res({ passthrough: true }) res: Response) {
+    await this.session.revokeAll(me.accountId);
+    await this.session.issue(res, me.accountId, me.id, await this.prisma.organization.findUniqueOrThrow({ where: { id: me.orgId } }), !!me.otp);
+    await this.audit.log(me, `${me.name} signed out all other devices`, 'icon-log-out', 'access');
+    return { message: 'Signed out everywhere else.' };
+  }
+
+  /** The strictest password rule across the organisations this account belongs to. */
+  private async minPassword(accountId: string) {
+    const list = await this.memberships(accountId);
+    return Math.max(12, ...list.map(x => Number((x.org.security as any)?.pwd) || 12));
+  }
+
+  /** Change your own password: needs the current one; signs out every other device. */
+  @Post('password') @HttpCode(200)
+  async changePassword(@Me() me: AuthUser, @Body() b: any, @Res({ passthrough: true }) res: Response) {
+    const acc = await this.prisma.account.findUniqueOrThrow({ where: { id: me.accountId } });
+    if (!acc.passwordHash || !(await bcrypt.compare(String(b.current || ''), acc.passwordHash))) throw new BadRequestException('Your current password isn’t right.');
+    const next = String(b.password || ''); const min = await this.minPassword(acc.id);
+    if (next.length < min) throw new BadRequestException(`Use at least ${min} characters.`);
+    if (await bcrypt.compare(next, acc.passwordHash)) throw new BadRequestException('Choose a password you haven’t used here before.');
+    await this.prisma.account.update({ where: { id: acc.id }, data: { passwordHash: await bcrypt.hash(next, 10) } });
+    await this.session.revokeAll(acc.id);
+    await this.session.issue(res, acc.id, me.id, await this.prisma.organization.findUniqueOrThrow({ where: { id: me.orgId } }), !!me.otp);
+    await this.audit.log(me, `${me.name} changed their password`, 'icon-key-round', 'access');
+    await this.securityMail(acc, 'Your Business OS password was changed', `Your password was changed and every other device was signed out.\n\nIf this wasn't you, reset your password straight away from the sign-in page ("Forgot password?").`);
+    return { message: 'Password changed. Other devices are signed out.' };
+  }
+
+  /** Emails the account about a security change, logged under its last-used organisation. */
+  private async securityMail(acc: { email: string; name: string; lastOrgId: string | null; id: string }, subject: string, body: string) {
+    const orgId = acc.lastOrgId || (await this.memberships(acc.id))[0]?.org.id;
+    if (!orgId) return;
+    const text = `Hi ${acc.name.split(' ')[0] || 'there'},\n\n${body}`;
+    await runAs({ orgId }, () => this.mail.send({ to: acc.email, subject, text, html: htmlOf(text), kind: 'security' })).catch(() => undefined);
+  }
+
+  /** Forgot password: emails a one-time link (valid 1 hour). Always answers the same, so it doesn't reveal who has an account. */
+  @Public() @Post('forgot') @HttpCode(200) @Limit('forgot', 5, 900)
+  async forgot(@Body() b: any) {
+    const email = str(b.email, 'Email', { required: true, max: 200 }).trim().toLowerCase();
+    const generic = { message: 'If that email has a Business OS account, a reset link is on its way. It works for an hour.' };
+    if ((await this.redis.hit(`bos:forgot:${email}`, 3600)) > 3) return generic;
+    const acc = await this.prisma.account.findUnique({ where: { email } });
+    if (!acc?.passwordHash) return generic;
+    const token = randomBytes(32).toString('base64url');
+    await this.redis.setJSON(`bos:reset:${sha(token)}`, acc.id, 3600);
+    const link = `${(process.env.WEB_ORIGIN || 'http://localhost:3000').split(',')[0]}/reset-password?token=${token}`;
+    await this.securityMail(acc, 'Reset your Business OS password', `Someone (hopefully you) asked to reset the password for ${acc.email}.\n\nChoose a new password here (the link works once, for an hour):\n${link}\n\nIf you didn't ask, ignore this email; your password stays as it is.`);
+    return generic;
+  }
+
+  /** Sets a new password from the emailed link. Signs out every device; two-factor still applies at the next sign-in. */
+  @Public() @Post('reset') @HttpCode(200) @Limit('forgot', 5, 900)
+  async reset(@Body() b: any) {
+    const token = str(b.token, 'Link', { required: true, max: 200 });
+    const key = `bos:reset:${sha(token)}`; const accountId = await this.redis.getJSON<string>(key);
+    if (!accountId) throw new BadRequestException('This reset link has expired or was already used. Ask for a new one.');
+    const acc = await this.prisma.account.findUniqueOrThrow({ where: { id: accountId } });
+    const next = String(b.password || ''); const min = await this.minPassword(acc.id);
+    if (next.length < min) throw new BadRequestException(`Use at least ${min} characters.`);
+    await this.redis.del(key);
+    // The link proved they can read this inbox, so the address counts as verified.
+    await this.prisma.account.update({ where: { id: acc.id }, data: { passwordHash: await bcrypt.hash(next, 10), emailVerifiedAt: acc.emailVerifiedAt || new Date() } });
+    await this.session.revokeAll(acc.id);
+    await this.redis.del(`bos:login:${acc.email}`);
+    await this.securityMail(acc, 'Your Business OS password was reset', 'Your password was reset from the emailed link, and every device was signed out.');
+    return { ok: true, message: 'Password changed. Sign in with the new one.' };
+  }
 
   /** Switch organisation: verifies the membership, then re-issues the cookie (spec §5.1). */
   @Post('switch') @HttpCode(200)
@@ -174,7 +274,7 @@ export class AuthController {
     if (!hit) throw new ForbiddenException('You aren’t a member of that organisation');
     // A second factor passed in this session carries over; otherwise the other organisation may ask for one.
     const acc = await this.prisma.account.findUniqueOrThrow({ where: { id: me.accountId } });
-    const challenge = await this.session.enter(res, acc, hit.m, hit.org, !!me.otp);
+    const challenge = await this.session.enter(res, acc, hit.m, hit.org, !!me.otp, me.sid);
     if (challenge) return challenge;
     return { ok: true, message: `Switched to ${hit.org.name}.` };
   }

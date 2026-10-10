@@ -71,7 +71,7 @@ export default function ProjectDetail() {
     </Card>
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(min(100%,400px),1fr))', gap: 20, alignItems: 'start' }}>
       {can('tasks') && <Card>
-        <CardHead title="Open tasks" count={pTasks.length} right={has('task.create') && <Btn size="sm" icon="plus" onClick={() => setUi({ newTask: { projectId: p.id } })} style={{ boxShadow: 'none' }}>Add task</Btn>} />
+        <CardHead title="Open tasks" count={pTasks.length} sub={!has('task.read_all') && p.ownerId !== me.user.id ? 'Your tasks on this project. The project owner sees them all.' : undefined} right={has('task.create') && <Btn size="sm" icon="plus" onClick={() => setUi({ newTask: { projectId: p.id } })} style={{ boxShadow: 'none' }}>Add task</Btn>} />
         {pTasks.map(t => <ProjectTaskRow key={t.id} t={t} />)}
         {!pTasks.length && <p style={{ margin: 0, padding: 20, fontSize: 14, color: '#64748b' }}>No open tasks.</p>}
       </Card>}

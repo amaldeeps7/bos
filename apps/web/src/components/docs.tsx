@@ -110,6 +110,8 @@ export function DocView({ kind, id }: { kind: 'quote' | 'invoice'; id: string })
     if (i.projectId) add('Project', 'icon-folder-kanban', 'sec', () => router.push(`/projects/${i.projectId}`));
     if (!UNISSUED.includes(i.status) && i.bal > 0 && has('credit_note.create')) add('Credit note', 'icon-receipt', 'sec', () => setUi({ credit: i.id }));
     if (['SENT', 'PARTIALLY_PAID'].includes(i.status) && actors['invoice.send']?.self) add('Email again', 'icon-mail', 'sec', () => run('send'));
+    if (['DRAFT', 'PENDING_APPROVAL', 'APPROVED'].includes(i.status) && has('invoice.cancel'))
+      add('Cancel invoice', 'icon-circle-x', 'sec', () => { if (confirm(`Cancel ${i.no}? It won’t be issued${i.milestoneId ? ', and its milestone can be billed again' : ''}.`)) run('cancel'); });
     add('PDF', 'icon-download', 'sec', () => window.open(`/api/invoices/${i.id}/pdf`, '_blank'));
     if (i.status === 'DRAFT') banner = i.rejected ? { tone: 'danger', icon: 'icon-undo-2', title: 'Sent back for changes.', text: i.rejected } : { tone: 'neutral', icon: 'icon-file-pen', title: 'Draft — not yet sent anywhere.', text: 'Submit it and Finance approves before it is issued.' };
     if (i.status === 'PENDING_APPROVAL') banner = { tone: 'warning', icon: 'icon-hourglass', title: mine ? `${person(i.byId).name} needs your approval to issue this.` : `Waiting on ${appr?.approverName || 'Finance'}.`, text: 'Whoever raises an invoice can’t approve it themselves.' };
@@ -265,6 +267,7 @@ export function DocEditor({ kind, id }: { kind: 'quote' | 'invoice'; id?: string
       </div>
       <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', gap: '20px 40px', padding: '18px 20px 22px' }}>
         <div style={{ flex: '1 1 280px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+          {isQ && ec?.overdue30 && <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start', padding: '10px 12px', borderRadius: 10, background: '#fff1f2', border: '1px solid rgba(190,18,60,.2)', color: '#be123c', fontSize: 14 }}><Icon name="circle-alert" size={16} style={{ marginTop: 2 }} /><span style={{ color: '#0f172a' }}>{ec.name} has an invoice more than 30 days overdue. Check with Finance before quoting new work.</span></div>}
           {isQ && k.maxDisc > limit && <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start', padding: '10px 12px', borderRadius: 10, background: '#fffbeb', border: '1px solid rgba(180,83,9,.2)', color: '#b45309', fontSize: 14 }}><Icon name="triangle-alert" size={16} style={{ marginTop: 2 }} /><span style={{ color: '#0f172a' }}>A {k.maxDisc}% discount is above the {limit}% limit — the Owner will be asked to approve.</span></div>}
           <label className="label">Notes for the customer<textarea className="textarea" rows={3} value={ed.notes} onChange={e => setEd({ ...ed, notes: e.target.value })} placeholder="Scope, assumptions, payment milestones…" /></label>
         </div>

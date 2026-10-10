@@ -8,6 +8,12 @@ export function fyLabel(iso: string, fyStart: 'April' | 'January' | string = 'Ap
   return `${String(start % 100).padStart(2, '0')}-${String((start + 1) % 100).padStart(2, '0')}`;
 }
 
+/** First day of the financial year containing `iso`, e.g. 2026-10-10 with April start -> "2026-04-01". */
+export function fyStart(iso: string, start: 'April' | 'January' | string = 'April'): string {
+  const y = +iso.slice(0, 4), m = +iso.slice(5, 7);
+  return start === 'April' ? `${m >= 4 ? y : y - 1}-04-01` : `${y}-01-01`;
+}
+
 export function formatNumber(sr: SeriesLike, iso: string, fyStart = 'April'): string {
   const yyyy = iso.slice(0, 4);
   return String(sr.pattern)

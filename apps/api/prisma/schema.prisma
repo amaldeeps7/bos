@@ -72,16 +72,19 @@ model Organization {
 
 /// The human: one sign-in across every organisation they belong to.
 model Account {
-  id           String       @id @default(cuid())
-  email        String       @unique
-  name         String
-  passwordHash String?
-  mfaSecret    String? // TOTP secret, encrypted (AES-256-GCM); set = two-factor is on
-  mfaBackup    String[]     @default([]) // SHA-256 of the unused backup codes
-  mfaStep      Int          @default(0) // last 30-second step accepted, so a code can't be replayed
-  lastOrgId    String?
-  createdAt    DateTime     @default(now())
-  memberships  Membership[]
+  id              String       @id @default(cuid())
+  email           String       @unique
+  name            String
+  passwordHash    String?
+  mfaSecret       String? // TOTP secret, encrypted (AES-256-GCM); set = two-factor is on
+  mfaBackup       String[]     @default([]) // SHA-256 of the unused backup codes
+  mfaStep         Int          @default(0) // last 30-second step accepted, so a code can't be replayed
+  sessionVersion  Int          @default(0) // bumped by "sign out everywhere" and password changes; older sessions stop working
+  emailVerifiedAt DateTime? // set by a verification link, or by accepting an emailed invitation
+  avatarAt        DateTime? // when the profile picture last changed (also busts caches); null = initials
+  lastOrgId       String?
+  createdAt       DateTime     @default(now())
+  memberships     Membership[]
 }
 
 model LegalEntity {
@@ -374,6 +377,7 @@ model Meeting {
   organizerId String
   guests      String[]          @default([])
   sequence    Int               @default(0)
+  cancelledAt DateTime? // cancelled meetings are kept (history), not deleted
   attendees   MeetingAttendee[]
   actions     ActionItem[]
 

@@ -5,7 +5,7 @@ import { Challenge, MfaStep, takeChallenge } from '@/components/mfa';
 import { flashNext } from '@/components/orgs';
 
 export default function Login() {
-  const [email, setEmail] = useState('priya@democonsulting.in'); const [password, setPassword] = useState('');
+  const [email, setEmail] = useState(''); const [password, setPassword] = useState('');
   const [err, setErr] = useState(''); const [busy, setBusy] = useState(false);
   const [demo, setDemo] = useState<{ email: string; name: string; role: string }[]>([]);
   const [challenge, setChallenge] = useState<Challenge | null>(null); const [reason, setReason] = useState<string | null>(null);
@@ -31,8 +31,8 @@ export default function Login() {
         {challenge ? <MfaStep challenge={challenge} onDone={done} onCancel={() => { setChallenge(null); history.replaceState(null, '', '/login'); }} /> : <>
         {reason === '2fa' && <div role="status" style={{ display: 'flex', gap: 10, padding: '12px 14px', borderRadius: 10, background: '#eff4ff', border: '1px solid rgba(0,82,255,.2)', fontSize: 14, color: '#0f172a' }}><span className="icon-shield-check" aria-hidden style={{ color: '#0052ff', fontSize: 16, marginTop: 2 }} /><span>Your organisation now requires two-factor sign-in. Sign in again and we’ll help you set it up.</span></div>}
         <form onSubmit={submit} className="card" style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 14 }}>
-          <label className="label">Work email<input className="input" type="email" autoComplete="username" value={email} onChange={e => setEmail(e.target.value)} /></label>
-          <label className="label">Password<input className="input" type="password" autoComplete="current-password" value={password} onChange={e => setPassword(e.target.value)} autoFocus /></label>
+          <label className="label">Work email<input className="input" type="email" autoComplete="username" autoFocus value={email} onChange={e => setEmail(e.target.value)} /></label>
+          <label className="label"><span style={{ display: 'flex', justifyContent: 'space-between' }}>Password<a href="/forgot-password" className="link" style={{ fontWeight: 400, fontSize: 13, textDecoration: 'none' }}>Forgot password?</a></span><input className="input" type="password" autoComplete="current-password" value={password} onChange={e => setPassword(e.target.value)} /></label>
           {err && <p style={{ margin: 0, fontSize: 14, color: '#be123c' }}>{err}</p>}
           <button className="btn btn-pri" type="submit" disabled={busy} style={{ justifyContent: 'center' }}>{busy ? 'Signing in…' : 'Sign in'}</button>
         </form>
