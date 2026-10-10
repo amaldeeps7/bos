@@ -5,12 +5,14 @@ import { useApp, useQ } from '@/lib/app';
 import { Btn, Card, CardHead, Icon } from './ui';
 
 /** What sign-in returns when a second step is needed. */
-export type Challenge = { mfa: 'code' | 'setup'; ticket: string; org?: string };
+/** A second step: a two-factor code or setup (`mfa`), or confirming the email address (`verify`). */
+export type Challenge = { mfa?: 'code' | 'setup'; verify?: 'email'; email?: string; ticket: string; org?: string };
+export const isChallenge = (r: unknown): r is Challenge => !!r && typeof r === 'object' && !!(r as Challenge).ticket && !!((r as Challenge).mfa || (r as Challenge).verify);
 const KEY = 'bos:mfa';
 
 /** Sign-up, invitations and switching organisation hand the second step to the sign-in page. */
 export function continueSignIn(c: Challenge, next?: 'setup') {
-  try { sessionStorage.setItem(KEY, JSON.stringify({ mfa: c.mfa, ticket: c.ticket })); } catch { /* storage blocked: they sign in again */ }
+  try { sessionStorage.setItem(KEY, JSON.stringify({ mfa: c.mfa, verify: c.verify, email: c.email, ticket: c.ticket })); } catch { /* storage blocked: they sign in again */ }
   location.href = `/login?step=2fa${next ? `&next=${next}` : ''}`;
 }
 export function takeChallenge(): Challenge | null {
@@ -135,5 +137,29 @@ export function MfaCard() {
         </div>
       )}
     </Card>
+  );
+}
+
+/** Sign-in step when the organisation requires a confirmed email: send the link, then sign in again. */
+export function VerifyStep({ challenge, onCancel }: { challenge: Challenge; onCancel: () => void }) {
+  const [msg, setMsg] = useState(''); const [e, setE] = useState(''); const [busy, setBusy] = useState(false);
+  const send = async () => {
+    setBusy(true); setE('');
+    try { setMsg((await api<{ message: string }>('auth/verify-email/send', { body: { ticket: challenge.ticket } })).message); }
+    catch (x) { setE(err(x, 'Could not send the link.')); }
+    setBusy(false);
+  };
+  return (
+    <div className="card" style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+        <span style={{ width: 36, height: 36, flex: 'none', borderRadius: 9, background: '#eff4ff', color: '#0052ff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="mail-check" size={18} /></span>
+        <div><p style={{ margin: 0, fontSize: 16, fontWeight: 600 }}>Confirm your email address</p>
+          <p style={{ margin: '2px 0 0', fontSize: 14, color: '#475569' }}>Your organisation asks everyone to confirm their address. We’ll send a link to <b>{challenge.email}</b>; open it, then sign in again.</p></div>
+      </div>
+      {msg && <p role="status" style={{ margin: 0, fontSize: 14, color: '#047857' }}>{msg}</p>}
+      {e && <p role="alert" style={{ margin: 0, fontSize: 14, color: '#be123c' }}>{e}</p>}
+      <button className="btn btn-pri" onClick={send} disabled={busy} style={{ justifyContent: 'center' }}>{busy ? 'Sending…' : msg ? 'Send it again' : 'Send the link'}</button>
+      <button type="button" className="link" onClick={onCancel} style={{ alignSelf: 'flex-start' }}>Back to sign in</button>
+    </div>
   );
 }

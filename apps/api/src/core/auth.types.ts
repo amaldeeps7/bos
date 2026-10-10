@@ -16,6 +16,8 @@ export interface AuthUser {
   /** this session's id (sign-out of one device) and the account's session version (sign-out everywhere) */
   sid?: string;
   sv?: number;
+  /** the organisation requires a confirmed email address and this person hasn't confirmed theirs */
+  verify?: boolean;
   /** session lifetime from the organisation's "sign out after inactivity" setting, in seconds */
   ttl?: number;
 }

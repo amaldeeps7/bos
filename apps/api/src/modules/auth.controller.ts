@@ -18,6 +18,7 @@ import { codeStep, mfaRequired, newBackupCodes, newSecret, openSecret, otpauthUr
 import type { TokenPayload } from '../core/auth.types';
 import { Limit } from '../core/rate-limit';
 import { AuditService } from '../core/audit.service';
+import { avatarUrl } from '../core/avatars';
 import { MailService, htmlOf } from '../core/mail.service';
 import { createHash, randomBytes } from 'crypto';
 
@@ -321,7 +322,9 @@ export class AuthController {
       await this.prisma.membership.update({ where: { id: u.id }, data: { name, title: str(b.title, 'Job title', { max: 120 }).trim() || u.title, status: 'Active', inviteToken: null, inviteExpiry: null, lastActiveAt: new Date() } });
       await this.prisma.auditLog.create({ data: { userId: u.id, who: name, text: `${name} accepted the invitation and joined`, icon: 'icon-user-plus', area: 'access' } });
     });
-    const challenge = await this.session.enter(res, await this.prisma.account.findUniqueOrThrow({ where: { id: u.accountId } }), u, org);
+    // Opening the emailed invitation proves the address.
+    const acc = await this.prisma.account.update({ where: { id: u.accountId }, data: { emailVerifiedAt: u.account.emailVerifiedAt || new Date() } });
+    const challenge = await this.session.enter(res, acc, u, org);
     return challenge || { ok: true };
   }
 
@@ -334,8 +337,9 @@ export class AuthController {
       this.prisma.businessUnit.findMany({ orderBy: { name: 'asc' } }),
       this.memberships(me.accountId),
     ]);
+    const acc = await this.prisma.account.findUniqueOrThrow({ where: { id: me.accountId }, select: { avatarAt: true, emailVerifiedAt: true } });
     return {
-      user: me,
+      user: { ...me, avatar: avatarUrl(me.accountId, acc.avatarAt), emailVerified: !!acc.emailVerifiedAt },
       org: { id: org.id, name: org.name, slug: org.slug, ini: ini(org.name), plan: org.plan, planLabel: planLabel(org), setupDone: org.setupDone, tz: org.tz, currency: org.currency, fyStart: org.fyStart,
         ourState: c.ourState || '', discLimit: c.discLimit, sacRates: c.sacRates, templates: org.templates, entity: c.entity },
       entities: entities.map(e => ({ id: e.id, name: e.name, gst: e.gst, gstin: e.gstin, state: placeOf(e) || '', isDefault: e.isDefault, address: e.address, bank: e.bank, upi: e.upi })),

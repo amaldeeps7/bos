@@ -394,7 +394,8 @@ describe('multitenancy (spec §9)', () => {
     const path = new URL(x.url).pathname + new URL(x.url).search;
     const zip = await http().get(path).buffer(true).parse((res, cb) => { const c: Buffer[] = []; res.on('data', d => c.push(d)); res.on('end', () => cb(null, Buffer.concat(c))); }).expect(200);
     expect((zip.body as Buffer).slice(0, 2).toString()).toBe('PK');
-    await http().get(path.replace(/sig=[0-9a-f]/, 'sig=0')).expect(400);
+    // Change the signature's first character (to a different one) and the link stops working.
+    await http().get(path.replace(/sig=([0-9a-f])/, (_m, c) => `sig=${c === '0' ? '1' : '0'}`)).expect(400);
     // Another organisation's members can't list it.
     expect((await http().get('/api/orgs/current/data').set('Cookie', b.cookie)).body.exports).toHaveLength(0);
   }, 90000);
@@ -839,5 +840,113 @@ describe('sessions and passwords', () => {
       const n = sent.filter(m => m.subject === 'New sign-in to Business OS');
       expect(n).toHaveLength(1); expect(n[0].text).toMatch(/Safari on iOS/);
     } finally { spy.mockRestore(); }
+  });
+});
+
+describe('account: email, photo, membership', () => {
+  const http = () => request(app.getHttpServer());
+  const cookieOf = (r: any) => r.headers['set-cookie'] as unknown as string[];
+  const capture = async () => {
+    const { MailService } = await import('../src/core/mail.service');
+    const sent: any[] = []; const spy = jest.spyOn(app.get(MailService), 'send').mockImplementation(async (m: any) => { sent.push(m); return { ok: true }; });
+    return { sent, spy, link: (subject: string) => sent.filter(m => m.subject === subject).at(-1)?.text.match(/token=(\S+)/)?.[1] as string };
+  };
+
+  it('lets only the Owner require confirmed emails; unconfirmed people confirm by link before signing in', async () => {
+    const { sent, spy, link } = await capture();
+    try {
+      const owner = await login('anand@democonsulting.in'); const pm = await login('priya@democonsulting.in');
+      await http().patch('/api/settings/security').set('Cookie', pm).send({ verifyEmail: true }).expect(403);
+      // Rohan hasn't confirmed his address (cleared here); the Owner turns the rule on.
+      await db.account.update({ where: { email: 'rohan@democonsulting.in' }, data: { emailVerifiedAt: null } });
+      await http().patch('/api/settings/security').set('Cookie', owner).send({ verifyEmail: true }).expect(200);
+      const r = await http().post('/api/auth/login').send({ email: 'rohan@democonsulting.in', password: 'demo1234', org: 'democonsulting' }).expect(200);
+      expect(r.body.verify).toBe('email'); expect(cookieOf(r)?.find(c => c.startsWith('bos_token='))).toBeUndefined();
+      await http().post('/api/auth/verify-email/send').send({ ticket: r.body.ticket }).expect(200);
+      const token = link('Confirm your email address');
+      expect((await http().post('/api/auth/verify-email').send({ token }).expect(200)).body.message).toMatch(/confirmed/);
+      await http().post('/api/auth/verify-email').send({ token }).expect(400); // once
+      expect((await http().post('/api/auth/login').send({ email: 'rohan@democonsulting.in', password: 'demo1234', org: 'democonsulting' }).expect(200)).body.ok).toBe(true);
+      await http().patch('/api/settings/security').set('Cookie', owner).send({ verifyEmail: false }).expect(200);
+    } finally { spy.mockRestore(); }
+  });
+
+  it('refuses a sign-up that would take over an invited address', async () => {
+    const owner = await login('anand@democonsulting.in');
+    await http().post('/api/settings/users/invite').set('Cookie', owner).send({ email: 'pending@democonsulting.in', role: 'Sales' }).expect(201);
+    const r = await http().post('/api/signup').send({ name: 'Grab', slug: 'grab-co', entity: { name: 'Grab', gst: false, state: '29' }, account: { name: 'X', email: 'pending@democonsulting.in', password: 'grab-password-12' } }).expect(400);
+    expect(r.body.message).toMatch(/invitation waiting/);
+    // The invitation can be withdrawn.
+    const inv = (await http().get('/api/settings').set('Cookie', owner)).body.users.find((u: any) => u.email === 'pending@democonsulting.in');
+    await http().delete(`/api/settings/users/${inv.id}`).set('Cookie', owner).expect(200);
+    expect((await http().get('/api/settings').set('Cookie', owner)).body.users.find((u: any) => u.email === 'pending@democonsulting.in')).toBeUndefined();
+  });
+
+  it('sets your own name and photo; photos are only served to your organisation', async () => {
+    const pm = await login('priya@democonsulting.in');
+    await http().patch('/api/me/profile').set('Cookie', pm).send({ name: 'Priya R.' }).expect(200);
+    expect((await http().get('/api/auth/me').set('Cookie', pm)).body.user.name).toBe('Priya R.');
+    await http().patch('/api/me/profile').set('Cookie', pm).send({ name: 'Priya Raman' }).expect(200);
+    const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
+    await http().post('/api/me/avatar').set('Cookie', pm).send({ image: 'data:image/png;base64,' + Buffer.from('not an image').toString('base64') }).expect(400);
+    await http().post('/api/me/avatar').set('Cookie', pm).send({ image: `data:image/png;base64,${png}` }).expect(200);
+    const me = (await http().get('/api/auth/me').set('Cookie', pm)).body.user;
+    expect(me.avatar).toMatch(new RegExp(`^/api/avatars/${me.accountId}\\?v=\\d+$`));
+    const people = (await http().get('/api/people').set('Cookie', pm)).body;
+    expect(people.find((p: any) => p.id === me.id).avatar).toBe(me.avatar);
+    const img = await http().get(me.avatar).set('Cookie', await login('arjun@democonsulting.in')).expect(200);
+    expect(img.headers['content-type']).toBe('image/png');
+    await http().get('/api/avatars/not-a-member').set('Cookie', pm).expect(404);
+    await http().delete('/api/me/avatar').set('Cookie', pm).expect(200);
+    expect((await http().get('/api/auth/me').set('Cookie', pm)).body.user.avatar).toBeNull();
+  });
+
+  it('changes your email once the new address confirms it', async () => {
+    const { spy, link } = await capture();
+    try {
+      const dev = await login('dev@democonsulting.in');
+      await http().post('/api/me/email').set('Cookie', dev).send({ email: 'anand@democonsulting.in', password: 'demo1234' }).expect(400); // taken
+      await http().post('/api/me/email').set('Cookie', dev).send({ email: 'dev.new@democonsulting.in', password: 'wrong' }).expect(400);
+      await http().post('/api/me/email').set('Cookie', dev).send({ email: 'dev.new@democonsulting.in', password: 'demo1234' }).expect(200);
+      await http().post('/api/auth/login').send({ email: 'dev@democonsulting.in', password: 'demo1234', org: 'democonsulting' }).expect(200); // unchanged until confirmed
+      await http().post('/api/auth/verify-email').send({ token: link('Confirm your new email address') }).expect(200);
+      await http().post('/api/auth/login').send({ email: 'dev.new@democonsulting.in', password: 'demo1234', org: 'democonsulting' }).expect(200);
+      expect((await db.membership.findFirstOrThrow({ where: { email: 'dev.new@democonsulting.in' } })).name).toBeTruthy();
+    } finally {
+      spy.mockRestore();
+      const acc = await db.account.findUniqueOrThrow({ where: { email: 'dev.new@democonsulting.in' } });
+      await db.account.update({ where: { id: acc.id }, data: { email: 'dev@democonsulting.in' } });
+      await db.membership.updateMany({ where: { accountId: acc.id }, data: { email: 'dev@democonsulting.in' } });
+    }
+  });
+
+  it('hands ownership over, lets non-owners leave, and deletes an account', async () => {
+    const owner = await login('anand@democonsulting.in');
+    const s = (await http().get('/api/settings').set('Cookie', owner)).body;
+    const rohan = s.users.find((u: any) => u.email === 'rohan@democonsulting.in');
+    const pmRole = s.roles.find((r: any) => r.name === 'Project manager');
+    await http().post('/api/settings/owner').set('Cookie', await login('priya@democonsulting.in')).send({ memberId: rohan.id, roleId: pmRole.id, password: 'demo1234' }).expect(403);
+    await http().post('/api/settings/owner').set('Cookie', owner).send({ memberId: rohan.id, roleId: pmRole.id, password: 'wrong' }).expect(400);
+    await http().post('/api/settings/owner').set('Cookie', owner).send({ memberId: rohan.id, roleId: pmRole.id, password: 'demo1234' }).expect(200);
+    expect((await http().get('/api/auth/me').set('Cookie', owner)).body.user.roleName).toBe('Project manager');
+    // An Owner can't leave without handing over; Rohan (now Owner) hands it back.
+    const rc = await login('rohan@democonsulting.in');
+    await http().post('/api/me/leave').set('Cookie', rc).send({ password: 'demo1234' }).expect(400);
+    const anand = s.users.find((u: any) => u.email === 'anand@democonsulting.in');
+    const sales = s.roles.find((r: any) => r.name === 'Sales');
+    await http().post('/api/settings/owner').set('Cookie', rc).send({ memberId: anand.id, roleId: sales.id, password: 'demo1234' }).expect(200);
+
+    // Arjun leaves; then deletes his account.
+    const ar = await login('arjun@democonsulting.in');
+    const left = await http().post('/api/me/leave').set('Cookie', ar).send({ password: 'demo1234' }).expect(200);
+    expect(left.body.next).toBeNull();
+    await http().post('/api/auth/login').send({ email: 'arjun@democonsulting.in', password: 'demo1234', org: 'democonsulting' }).expect(401);
+    await db.membership.updateMany({ where: { email: 'arjun@democonsulting.in' }, data: { status: 'Active' } });
+    const ar2 = await login('arjun@democonsulting.in');
+    await http().post('/api/me/delete').set('Cookie', ar2).send({ password: 'demo1234', confirm: 'nope' }).expect(400);
+    await http().post('/api/me/delete').set('Cookie', ar2).send({ password: 'demo1234', confirm: 'arjun@democonsulting.in' }).expect(200);
+    await http().get('/api/auth/me').set('Cookie', ar2).expect(401);
+    await http().post('/api/auth/login').send({ email: 'arjun@democonsulting.in', password: 'demo1234', org: 'democonsulting' }).expect(401);
+    expect(await db.account.findUnique({ where: { email: 'arjun@democonsulting.in' } })).toBeNull();
   });
 });

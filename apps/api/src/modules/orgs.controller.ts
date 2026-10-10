@@ -74,8 +74,9 @@ export class OrgsController {
       if (String(a.password || '').length < 12) throw new BadRequestException('Use a password of at least 12 characters.');
       const ex = await this.prisma.account.findUnique({ where: { email } });
       if (ex?.passwordHash) throw new BadRequestException('That email already has a Business OS account. Sign in, then create the organisation from the organisation menu.');
-      account = ex ? await this.prisma.account.update({ where: { id: ex.id }, data: { name: you, passwordHash: await bcrypt.hash(String(a.password), 10) } })
-        : await this.prisma.account.create({ data: { email, name: you, passwordHash: await bcrypt.hash(String(a.password), 10) } });
+      // An invitation is waiting for this address: joining goes through the emailed link (which proves the inbox).
+      if (ex) throw new BadRequestException('That email has an invitation waiting. Use the link in the invitation email to join, then create your organisation from the organisation menu.');
+      account = await this.prisma.account.create({ data: { email, name: you, passwordHash: await bcrypt.hash(String(a.password), 10) } });
     }
 
     const id = 'org_' + randomBytes(6).toString('hex');
@@ -105,6 +106,8 @@ export class OrgsController {
     const org = await this.prisma.organization.findUniqueOrThrow({ where: { id } });
     // The new organisation's policy may ask the Owner for two-factor (on by default); a signed-in creator keeps theirs.
     const acc = await this.prisma.account.findUniqueOrThrow({ where: { id: account.id } });
+    // A new account gets a link to confirm its address (required only where an organisation turns that on).
+    if (!acc.emailVerifiedAt) await this.session.emailLink(acc, acc.email, 'verify', org.id);
     const challenge = await this.session.enter(res, acc, { id: made.owner.id, role: { name: 'Owner' } }, org, !!me?.otp);
     return { ok: true, id, slug, invited, message: `${name} is ready. You’re its Owner.`, ...(challenge || {}) };
   }

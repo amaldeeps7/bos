@@ -98,7 +98,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             </div>
             <div style={{ flex: 'none', borderTop: '1px solid #e2e8f0', padding: 12, display: 'flex', alignItems: 'center', gap: 4 }}>
               <button onClick={() => go(`/team/${me.user.id}`)} title="Your profile" className={onMe ? '' : 'hov-soft'} style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 10, padding: '6px 8px', border: 0, borderRadius: 8, cursor: 'pointer', background: onMe ? '#f1f5f9' : 'transparent' }}>
-                <span style={{ width: 32, height: 32, flex: 'none', borderRadius: 999, background: '#f1f5f9', color: '#64748b', fontSize: 13, fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{myIni}</span>
+                {me.user.avatar ? <img src={me.user.avatar} alt="" width={32} height={32} style={{ width: 32, height: 32, flex: 'none', borderRadius: 999, objectFit: 'cover' }} /> : <span style={{ width: 32, height: 32, flex: 'none', borderRadius: 999, background: '#f1f5f9', color: '#64748b', fontSize: 13, fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{myIni}</span>}
                 <span style={{ minWidth: 0, flex: 1, textAlign: 'left' }}>
                   <span style={{ display: 'block', fontSize: 14, fontWeight: 500, lineHeight: 1.2 }}>{me.user.name}</span>
                   <span style={{ display: 'block', fontSize: 13, color: '#64748b', lineHeight: 1.3 }}>{ui.viewAs || me.user.roleName}</span>
@@ -136,7 +136,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                 <Icon name="sparkles" size={16} />{!isMobile && <span>Assistant</span>}
               </button>
             )}
-            {isMobile && <button onClick={() => go(`/team/${me.user.id}`)} aria-label="Your profile" style={{ width: 36, height: 36, flex: 'none', border: '1px solid #e2e8f0', borderRadius: 999, background: '#f1f5f9', color: '#475569', fontSize: 12, fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{myIni}</button>}
+            {isMobile && <button onClick={() => go(`/team/${me.user.id}`)} aria-label="Your profile" style={{ width: 36, height: 36, flex: 'none', border: '1px solid #e2e8f0', borderRadius: 999, background: '#f1f5f9', color: '#475569', fontSize: 12, fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', padding: 0 }}>{me.user.avatar ? <img src={me.user.avatar} alt="" width={36} height={36} style={{ width: 36, height: 36, objectFit: 'cover' }} /> : myIni}</button>}
             {ui.notifOpen && (
               <div style={{ position: 'absolute', top: 58, right: 16, width: 340, maxWidth: 'calc(100% - 32px)', background: '#fff', border: '1px solid #e2e8f0', borderRadius: 12, boxShadow: '0 16px 48px -12px rgba(15,23,42,.2),0 4px 12px -4px rgba(15,23,42,.08)', overflow: 'hidden' }}>
                 <div style={{ padding: '12px 16px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -196,7 +196,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                 <div style={{ width: 36, height: 4, borderRadius: 999, background: '#e2e8f0', margin: '0 auto 12px' }} />
                 <div style={{ display: 'flex', gap: 8, marginBottom: 6 }}>
                   <button onClick={() => go(`/team/${me.user.id}`)} className="hov-soft" style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 10, padding: 8, border: '1px solid #e2e8f0', borderRadius: 12, background: '#fff', cursor: 'pointer', textAlign: 'left' }}>
-                    <span style={{ width: 36, height: 36, flex: 'none', borderRadius: 999, background: '#f1f5f9', color: '#475569', fontSize: 13, fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{myIni}</span>
+                    {me.user.avatar ? <img src={me.user.avatar} alt="" width={36} height={36} style={{ width: 36, height: 36, flex: 'none', borderRadius: 999, objectFit: 'cover' }} /> : <span style={{ width: 36, height: 36, flex: 'none', borderRadius: 999, background: '#f1f5f9', color: '#475569', fontSize: 13, fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{myIni}</span>}
                     <span style={{ minWidth: 0 }}><span className="ellipsis" style={{ display: 'block', fontSize: 14, fontWeight: 600 }}>{me.user.name}</span><span className="ellipsis" style={{ display: 'block', fontSize: 12, color: '#64748b' }}>{ui.viewAs || me.user.roleName} · Your profile</span></span>
                   </button>
                   <button onClick={() => { setMore(false); setUi({ orgMenu: true }); }} aria-label="Switch organisation" className="hov-soft" style={{ flex: 'none', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 2, width: 76, border: '1px solid #e2e8f0', borderRadius: 12, background: '#fff', cursor: 'pointer', fontSize: 11, color: '#475569' }}>

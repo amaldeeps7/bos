@@ -32,7 +32,7 @@ export default function Customers() {
             <span className="mono" style={{ fontSize: 13, color: c.gstin ? '#334155' : '#94a3b8' }}>{c.gstin || 'No GSTIN'}</span>
             <span className="num" style={{ textAlign: 'right' }}>{c.projects}</span>
             <span className="num" style={{ textAlign: 'right', fontWeight: 500 }}>{c.outstanding ? inr(c.outstanding) : '—'}</span>
-            <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}><Avatar name={person(c.ownerId).name} />{person(c.ownerId).name}</span>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}><Avatar name={person(c.ownerId).name} src={person(c.ownerId).avatar} />{person(c.ownerId).name}</span>
           </button>
         ))}
         {!rows.length && <p style={{ margin: 0, padding: '28px 20px', fontSize: 14, color: '#64748b' }}>No customer matches that search.</p>}

@@ -4,6 +4,7 @@ import { relTime } from '@bos/shared';
 import { api, ApiError } from '@/lib/api';
 import { useApp, useQ } from '@/lib/app';
 import { Badge, Btn, Card, CardHead, Icon } from './ui';
+import { flashNext } from './orgs';
 
 const err = (x: unknown, f: string) => (x instanceof ApiError ? x.message : f);
 
@@ -60,6 +61,61 @@ export function SessionsCard() {
         </div>
       ))}
       {!rows.length && <p style={{ margin: 0, padding: '14px 20px', fontSize: 14, color: '#64748b' }}>Only this device.</p>}
+    </Card>
+  );
+}
+
+/** Profile → Email: confirm your address, or change it (the new one confirms by link). */
+export function EmailCard({ email, verified }: { email: string; verified: boolean }) {
+  const { toast } = useApp();
+  const [open, setOpen] = useState(false); const [f, setF] = useState({ email: '', password: '' }); const [e, setE] = useState('');
+  const send = async () => { try { toast((await api<{ message: string }>('auth/verify-email/send', { body: {} })).message); } catch (x) { toast(err(x, 'Could not send the link.')); } };
+  const change = async () => {
+    setE('');
+    try { toast((await api<{ message: string }>('me/email', { body: f })).message); setOpen(false); setF({ email: '', password: '' }); }
+    catch (x) { setE(err(x, 'Could not start the change.')); }
+  };
+  return (
+    <Card>
+      <CardHead title="Email" sub={<span>{email} · {verified ? <span style={{ color: '#047857' }}>confirmed</span> : <span style={{ color: '#b45309' }}>not confirmed yet</span>}</span>}
+        right={!open && <div style={{ display: 'flex', gap: 8 }}>{!verified && <Btn size="sm" onClick={send}>Send confirmation link</Btn>}<Btn size="sm" onClick={() => setOpen(true)}>Change email</Btn></div>} />
+      {open && (
+        <div style={{ padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 420 }}>
+          <label className="label">New email<input className="input" type="email" autoFocus value={f.email} onChange={x => setF({ ...f, email: x.target.value })} /></label>
+          <label className="label">Your password<input className="input" type="password" autoComplete="current-password" value={f.password} onChange={x => setF({ ...f, password: x.target.value })} /><span className="hint">We’ll email the new address a link. The change happens when it’s opened; until then you keep signing in as {email}.</span></label>
+          {e && <p role="alert" style={{ margin: 0, fontSize: 14, color: '#be123c' }}>{e}</p>}
+          <div style={{ display: 'flex', gap: 8 }}><Btn onClick={() => { setOpen(false); setE(''); }}>Cancel</Btn><Btn kind="pri" onClick={change} disabled={!f.email || !f.password}>Send link</Btn></div>
+        </div>
+      )}
+    </Card>
+  );
+}
+
+/** Profile → Leave or delete: leaving this organisation, or deleting the account everywhere. */
+export function DangerCard({ isOwner, orgName, email }: { isOwner: boolean; orgName: string; email: string }) {
+  const [mode, setMode] = useState<null | 'leave' | 'delete'>(null); const [f, setF] = useState({ password: '', confirm: '' }); const [e, setE] = useState(''); const [busy, setBusy] = useState(false);
+  const go = async () => {
+    setBusy(true); setE('');
+    try {
+      const r = await api<{ message: string; next?: string | null }>(mode === 'leave' ? 'me/leave' : 'me/delete', { body: f });
+      flashNext(r.message);
+      location.href = mode === 'leave' && r.next ? '/' : '/login';
+    } catch (x) { setE(err(x, 'Something went wrong.')); setBusy(false); }
+  };
+  return (
+    <Card>
+      <CardHead title="Leave or delete" sub={isOwner ? `You own ${orgName}: hand ownership to someone else first (Settings → Organisation) before leaving.` : 'Your records stay with the organisation, under your name.'}
+        right={!mode && <div style={{ display: 'flex', gap: 8 }}>{!isOwner && <Btn size="sm" onClick={() => setMode('leave')}>Leave {orgName}</Btn>}<Btn size="sm" kind="danger" onClick={() => setMode('delete')}>Delete account</Btn></div>} />
+      {mode && (
+        <div style={{ padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 440 }}>
+          <p style={{ margin: 0, fontSize: 14, color: '#334155' }}>{mode === 'leave' ? `You’ll lose access to ${orgName}. Approvals waiting on you move to someone else. An admin can add you back later.` : 'You’ll leave every organisation and can no longer sign in. Your photo is removed. This can’t be undone.'}</p>
+          <label className="label">Your password<input className="input" type="password" autoComplete="current-password" autoFocus value={f.password} onChange={x => setF({ ...f, password: x.target.value })} /></label>
+          {mode === 'delete' && <label className="label">Type your email to confirm<input className="input" value={f.confirm} onChange={x => setF({ ...f, confirm: x.target.value })} placeholder={email} /></label>}
+          {e && <p role="alert" style={{ margin: 0, fontSize: 14, color: '#be123c' }}>{e}</p>}
+          <div style={{ display: 'flex', gap: 8 }}><Btn onClick={() => { setMode(null); setE(''); setF({ password: '', confirm: '' }); }}>Cancel</Btn>
+            <Btn kind="danger" onClick={go} disabled={busy || !f.password || (mode === 'delete' && !f.confirm)}>{mode === 'leave' ? `Leave ${orgName}` : 'Delete my account'}</Btn></div>
+        </div>
+      )}
     </Card>
   );
 }

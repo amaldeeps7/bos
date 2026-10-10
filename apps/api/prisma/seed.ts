@@ -66,7 +66,7 @@ async function main() {
   for (const [k, name, title, role, status, la] of people) {
     const [dept, , phone, joined] = org[k];
     const email = `${k}@democonsulting.in`;
-    const acc = await prisma.account.create({ data: { email, name, passwordHash: status === 'Active' ? hash : null } });
+    const acc = await prisma.account.create({ data: { email, name, passwordHash: status === 'Active' ? hash : null, emailVerifiedAt: status === 'Active' ? new Date() : null } });
     A[k] = acc.id;
     U[k] = (await prisma.membership.create({ data: { accountId: acc.id, email, name, title, roleId: roles[role], status, lastActiveAt: last[la],
       dept, phone, location: 'Mumbai', joinedAt: joined ? new Date(joined + 'T00:00:00Z') : null, leaveUntil: k === 'meera' ? D(2) : null,

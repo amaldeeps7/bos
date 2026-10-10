@@ -10,6 +10,8 @@ import { gstParty, num, oneOf, str } from '../core/util';
 import { MailService, fill, htmlOf } from '../core/mail.service';
 import { orgId, Scope } from '../core/tenant';
 import { MembersService } from '../core/members.service';
+import { NotifyService } from '../core/notify.service';
+import * as bcrypt from 'bcryptjs';
 import { FinanceService } from './finance.service';
 import { Limit } from '../core/rate-limit';
 import { planAllows, planOf } from '../core/plans';
@@ -27,7 +29,7 @@ const lastActive = (x: Date | null) => (!x ? '—' : Date.now() - x.getTime() < 
 
 @Controller('settings')
 export class SettingsController {
-  constructor(private prisma: PrismaService, private access: AccessService, private audit: AuditService, private orgs: OrgService, private mail: MailService, private members: MembersService, private fin: FinanceService) {}
+  constructor(private prisma: PrismaService, private access: AccessService, private audit: AuditService, private orgs: OrgService, private mail: MailService, private members: MembersService, private fin: FinanceService, private notify: NotifyService) {}
 
   private async org() { return this.prisma.organization.findUniqueOrThrow({ where: { id: orgId() } }); }
   private async patchJson(field: 'security' | 'policy' | 'taxOpts' | 'reminders' | 'templates' | 'modules', patch: Record<string, unknown>) {
@@ -215,6 +217,38 @@ export class SettingsController {
     return { message: `${u.name} can sign in with their password and will be asked to set two-factor up again.` };
   }
 
+  /** Withdraws an invitation that hasn't been accepted: the link stops working. */
+  @Delete('users/:id') @Perm('user.invite')
+  async revokeInvite(@Me() me: AuthUser, @Param('id') id: string) {
+    const u = await this.prisma.membership.findUniqueOrThrow({ where: { id } });
+    if (u.status !== 'Invited') throw new BadRequestException('Only an invitation that hasn’t been accepted can be withdrawn. Deactivate active people instead.');
+    await this.prisma.membership.delete({ where: { id } });
+    await this.audit.log(me, `Withdrew the invitation to ${u.email}`, 'icon-user-x', 'access');
+    return { message: `Invitation to ${u.email} withdrawn.` };
+  }
+
+  /** The Owner hands the organisation to another active member and takes another role. Needs the Owner's password. */
+  @Post('owner') @HttpCode(200)
+  async transferOwner(@Me() me: AuthUser, @Body() b: any) {
+    if (!(me.roleName === 'Owner' && me.builtIn)) throw new ForbiddenException('Only the Owner can hand over ownership.');
+    const acc = await this.prisma.account.findUniqueOrThrow({ where: { id: me.accountId } });
+    if (!acc.passwordHash || !(await bcrypt.compare(String(b.password || ''), acc.passwordHash))) throw new BadRequestException('That password isn’t right.');
+    const to = await this.prisma.membership.findUnique({ where: { id: String(b.memberId || '') } });
+    if (!to || to.status !== 'Active' || to.id === me.id) throw new BadRequestException('Choose an active member to hand over to.');
+    const [owner, mine] = await Promise.all([
+      this.prisma.role.findFirstOrThrow({ where: { builtIn: true } }),
+      this.prisma.role.findUnique({ where: { id: String(b.roleId || '') } }),
+    ]);
+    if (!mine || mine.builtIn) throw new BadRequestException('Choose the role you’ll have after handing over.');
+    await this.prisma.$transaction(async tx => {
+      await tx.membership.update({ where: { id: to.id }, data: { roleId: owner.id, scope: { all: true } } });
+      await tx.membership.update({ where: { id: me.id }, data: { roleId: mine.id } });
+    });
+    await this.audit.log(me, `Handed ownership to ${to.name}; ${me.name} is now ${mine.name}`, 'icon-crown', 'access');
+    await this.notify.send([to.id], 'icon-crown', `${me.name} made you the Owner of the organisation`, '/settings', me.id);
+    return { message: `${to.name} is now the Owner. You’re ${mine.name}.` };
+  }
+
   @Post('users/:id/toggle') @HttpCode(200) @Perm('user.read')
   async userToggle(@Me() me: AuthUser, @Param('id') id: string) {
     if (id === me.id) throw new BadRequestException('You can’t deactivate yourself');
@@ -326,8 +360,14 @@ export class SettingsController {
   async security(@Me() me: AuthUser, @Body() b: any) {
     const patch: any = {};
     for (const k of ['mfaAll', 'mfaFin', 'ssoGoogle', 'newDevice'] as const) if (b[k] !== undefined) patch[k] = !!b[k];
+    // Requiring confirmed email addresses can lock people out, so only the Owner decides, and only once their own is confirmed.
+    if (b.verifyEmail !== undefined) {
+      if (!(me.roleName === 'Owner' && me.builtIn)) throw new ForbiddenException('Only the Owner can change whether email addresses must be confirmed.');
+      if (b.verifyEmail && !(await this.prisma.account.findUniqueOrThrow({ where: { id: me.accountId } })).emailVerifiedAt) throw new BadRequestException('Confirm your own email address first (Profile → Email).');
+      patch.verifyEmail = !!b.verifyEmail;
+    }
     if (b.timeout !== undefined) patch.timeout = oneOf(b.timeout, 'Timeout', ['30 minutes', '8 hours', '7 days', '30 days']);
-    if (b.pwd !== undefined) patch.pwd = oneOf(String(b.pwd), 'Password length', ['10', '12', '16']);
+    if (b.pwd !== undefined) patch.pwd = oneOf(String(b.pwd), 'Password length', ['12', '16']);
     if (b.domains !== undefined) patch.domains = str(b.domains, 'Domains', { max: 500 });
     await this.patchJson('security', patch);
     await this.audit.log(me, b.label ? `${b.on ? 'Turned on' : 'Turned off'}: ${b.label}` : 'Updated session and password rules', 'icon-shield-check', 'access');

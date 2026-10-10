@@ -16,7 +16,7 @@ export class AccessService {
   async load(membershipId: string, accountId: string): Promise<AuthUser | null> {
     const o = orgId();
     const [u, org] = await Promise.all([
-      this.prisma.membership.findUnique({ where: { id: membershipId }, include: { account: { select: { sessionVersion: true } } } }),
+      this.prisma.membership.findUnique({ where: { id: membershipId }, include: { account: { select: { sessionVersion: true, emailVerifiedAt: true } } } }),
       this.prisma.organization.findUnique({ where: { id: o } }),
     ]);
     if (!u || u.status !== 'Active' || u.accountId !== accountId || !org || org.status !== 'active') return null;
@@ -25,7 +25,7 @@ export class AccessService {
     const scope: Scope = role.builtIn || !u.scope ? { all: true } : (u.scope as unknown as Scope);
     return { id: u.id, accountId: u.accountId, orgId: o, name: u.name, email: u.email, title: u.title, roleId: u.roleId, roleName: role.name, builtIn: role.builtIn,
       perms: role.perms, modules, scope, demo: org.demo && process.env.DEMO_MODE === 'true', mfa: mfaRequired(org, role.name),
-      sv: u.account.sessionVersion, ttl: sessionTtl(org.security) };
+      sv: u.account.sessionVersion, ttl: sessionTtl(org.security), verify: !!(org.security as any)?.verifyEmail && !u.account.emailVerifiedAt };
   }
 
   async role(roleId: string): Promise<{ name: string; builtIn: boolean; perms: string[] }> {

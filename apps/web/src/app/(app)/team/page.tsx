@@ -35,7 +35,7 @@ export default function TeamPage() {
         {ks.map(k => (
           <div key={k.id}>
             <button onClick={() => open(k.id)} className="org-card" style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', background: '#fff', border: '1px solid #e2e8f0', borderRadius: 10, cursor: 'pointer', textAlign: 'left' }}>
-              <Face name={k.name} status={k.status} size={30} />
+              <Face name={k.name} src={k.avatar} status={k.status} size={30} />
               <span style={{ minWidth: 0 }}>
                 <span className="ellipsis" style={{ display: 'block', fontSize: 14, fontWeight: 500 }}>{k.name}</span>
                 <span className="ellipsis" style={{ display: 'block', fontSize: 12.5, color: '#64748b' }}>{k.title}</span>
@@ -61,7 +61,7 @@ export default function TeamPage() {
             <div key={r.id} style={{ display: 'flex', flexDirection: 'column' }}>
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
                 <button onClick={() => open(r.id)} className="org-card" style={{ width: 300, maxWidth: '100%', display: 'flex', alignItems: 'center', gap: 12, padding: '14px 16px', background: '#fff', border: '1px solid rgba(0,82,255,.25)', borderRadius: 12, boxShadow: '0 1px 2px rgba(15,23,42,.04)', cursor: 'pointer', textAlign: 'left' }}>
-                  <Face name={r.name} status={r.status} size={40} accent />
+                  <Face name={r.name} src={r.avatar} status={r.status} size={40} accent />
                   <span style={{ minWidth: 0 }}>
                     <span style={{ display: 'block', fontSize: 15, fontWeight: 600 }}>{r.name}</span>
                     <span style={{ display: 'block', fontSize: 13, color: '#64748b' }}>{r.title}</span>
@@ -77,7 +77,7 @@ export default function TeamPage() {
                         <div style={{ width: 1, height: 20, background: line, marginLeft: 28 }} />
                         <p style={{ margin: '0 0 6px', fontSize: 12.5, fontWeight: 600, color: '#64748b' }}>{h.dept || h.title} <span style={{ fontWeight: 500, color: '#94a3b8' }}>· {n} {n === 1 ? 'person' : 'people'}</span></p>
                         <button onClick={() => open(h.id)} className="org-card" style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', background: '#fff', border: '1px solid #e2e8f0', borderRadius: 12, boxShadow: '0 1px 2px rgba(15,23,42,.04)', cursor: 'pointer', textAlign: 'left' }}>
-                          <Face name={h.name} status={h.status} />
+                          <Face name={h.name} src={h.avatar} status={h.status} />
                           <span style={{ minWidth: 0 }}>
                             <span className="ellipsis" style={{ display: 'block', fontSize: 14, fontWeight: 600 }}>{h.name}</span>
                             <span className="ellipsis" style={{ display: 'block', fontSize: 13, color: '#64748b' }}>{h.title}</span>
@@ -110,7 +110,7 @@ export default function TeamPage() {
           {rows.map(r => (
             <button key={r.id} onClick={() => open(r.id)} className="row-btn" style={{ display: 'flex', flexWrap: width < 900 ? 'wrap' : 'nowrap', alignItems: 'center', gap: '8px 20px', padding: '12px 20px' }}>
               <span style={{ display: 'flex', alignItems: 'center', gap: 12, flex: '1 1 220px', minWidth: 0 }}>
-                <Face name={r.name} status={r.status} />
+                <Face name={r.name} src={r.avatar} status={r.status} />
                 <span style={{ minWidth: 0 }}>
                   <span style={{ display: 'block', fontSize: 14, fontWeight: 500 }}>{r.name}</span>
                   <span style={{ display: 'block', fontSize: 13, color: '#64748b' }}>{r.title}</span>

@@ -83,7 +83,34 @@ function Org({ s }: { s: Settings }) {
         <Kv k="Signed in as" v={me.user.email} />
       </div>
     </Card>
+    {me.user.roleName === 'Owner' && me.user.builtIn && <HandOver s={s} />}
   </>;
+}
+
+/** The Owner gives the organisation to another active member and picks their own new role. */
+function HandOver({ s }: { s: Settings }) {
+  const act = useAct(); const { me } = useApp();
+  const [open, setOpen] = useState(false); const [f, setF] = useState({ memberId: '', roleId: '', password: '' });
+  const people = s.users.filter(u => u.status === 'Active' && u.id !== me.user.id);
+  const roles = s.roles.filter(r => !r.builtIn);
+  const go = async () => {
+    const to = people.find(p => p.id === f.memberId);
+    if (!to || !confirm(`Make ${to.name} the Owner? You’ll become ${roles.find(r => r.id === f.roleId)?.name}, and only they can give it back.`)) return;
+    const r = await act('settings/owner', f); if (r) location.reload();
+  };
+  return (
+    <Card>
+      <CardHead title="Hand over ownership" sub="The Owner holds every permission, manages billing and can close the organisation. There is one Owner." right={!open && <Btn size="sm" onClick={() => setOpen(true)} disabled={!people.length}>Choose new Owner</Btn>} />
+      {open && (
+        <div style={{ padding: '16px 20px', display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(200px,1fr))', gap: 14 }}>
+          <label className="label">New Owner<select className="select" value={f.memberId} onChange={e => setF({ ...f, memberId: e.target.value })}><option value="">Choose a person…</option>{people.map(p => <option key={p.id} value={p.id}>{p.name} — {p.role}</option>)}</select></label>
+          <label className="label">Your role after<select className="select" value={f.roleId} onChange={e => setF({ ...f, roleId: e.target.value })}><option value="">Choose a role…</option>{roles.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}</select></label>
+          <label className="label">Your password<input className="input" type="password" autoComplete="current-password" value={f.password} onChange={e => setF({ ...f, password: e.target.value })} /></label>
+          <div style={{ gridColumn: '1/-1', display: 'flex', gap: 8 }}><Btn onClick={() => { setOpen(false); setF({ memberId: '', roleId: '', password: '' }); }}>Cancel</Btn><Btn kind="danger" onClick={go} disabled={!f.memberId || !f.roleId || !f.password}>Hand over</Btn></div>
+        </div>
+      )}
+    </Card>
+  );
 }
 
 const stateOptions = Object.entries(STATE_CODES).sort((a, b) => a[1].localeCompare(b[1])).map(([c, n]) => <option key={c} value={c}>{n}</option>);
@@ -224,6 +251,7 @@ function Users({ s }: { s: Settings }) {
               <span style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 6 }}>
                 {has('user.manage') && u.mfa && !self && <button onClick={() => confirm(`Reset two-factor for ${u.name}? Use this when they’ve lost their phone. They sign in with their password and set it up again.`) && act(`settings/users/${u.id}/reset-mfa`)} title="Reset two-factor (lost phone)" aria-label={`Reset two-factor for ${u.name}`} className="outline-blue" style={{ width: 32, height: 32, border: '1px solid #e2e8f0', borderRadius: 8, background: '#fff', color: '#64748b', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="shield-off" size={14} /></button>}
                 {has('user.manage') && u.status !== 'Invited' && <button onClick={() => setDlg(u)} title="Edit details" aria-label={`Edit ${u.name}`} className="outline-blue" style={{ width: 32, height: 32, border: '1px solid #e2e8f0', borderRadius: 8, background: '#fff', color: '#64748b', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="pencil" size={14} /></button>}
+                {u.status === 'Invited' && has('user.invite') && <button onClick={() => confirm(`Withdraw the invitation to ${u.email}? The link in their email stops working.`) && act(`settings/users/${u.id}`, undefined, { method: 'DELETE' })} title="Withdraw invitation" aria-label={`Withdraw the invitation to ${u.email}`} className="outline-red" style={{ width: 32, height: 32, border: '1px solid #e2e8f0', borderRadius: 8, background: '#fff', color: '#64748b', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="x" size={14} /></button>}
                 {self ? <span style={{ fontSize: 13, color: '#94a3b8', width: 92, textAlign: 'center' }}>You</span> : <button className="btn btn-sec" onClick={() => act(`settings/users/${u.id}/toggle`)} style={{ height: 32, padding: '0 12px', fontSize: 13, boxShadow: 'none' }}>{u.status === 'Active' ? 'Deactivate' : u.status === 'Invited' ? 'Resend invite' : 'Reactivate'}</button>}
               </span>
             </div>
@@ -335,7 +363,7 @@ function Roles({ s }: { s: Settings }) {
 }
 
 function Security({ s }: { s: Settings }) {
-  const act = useAct(); const { me } = useApp(); const [sec, setSec] = useState(s.security);
+  const act = useAct(); const { me } = useApp(); const [sec, setSec] = useState(s.security); const owner = me.user.roleName === 'Owner' && me.user.builtIn;
   useEffect(() => setSec(s.security), [s.security]);
   const t = (k: string, label: string, desc: string) => <ToggleRow key={k} label={label} desc={desc} on={!!s.security[k]} onClick={() => act('settings/security', { [k]: !s.security[k], label, on: !s.security[k] }, { method: 'PATCH', quiet: true })} />;
   return <>
@@ -343,13 +371,16 @@ function Security({ s }: { s: Settings }) {
       <CardHead title="Sign-in" />
       {t('mfaAll', 'Require two-factor sign-in for everyone', `A code from an authenticator app at every sign-in. Anyone without it sets it up next time they sign in.${me.demo ? ' Not enforced in the sample workspace.' : ''}`)}
       {t('mfaFin', 'Always require two-factor for Owner and Finance', 'Applies even when the rule above is off. Lost phone? An admin can reset it from Users.')}
-      {t('newDevice', 'Email people when they sign in from a new device', '')}
+      {t('newDevice', 'Email people when they sign in from a new device', 'With the time, browser and IP address, so they can spot sign-ins that weren’t them.')}
+      {/* Can lock people out, so only the Owner decides (the API enforces this too). */}
+      <ToggleRow label="Require a confirmed email address" desc={owner ? 'People confirm their address from an emailed link before they can sign in. Accepting an invitation counts as confirming.' : 'Only the Owner can change this.'}
+        on={!!s.security.verifyEmail} onClick={() => owner && act('settings/security', { verifyEmail: !s.security.verifyEmail, label: 'Require a confirmed email address', on: !s.security.verifyEmail }, { method: 'PATCH', quiet: true })} style={owner ? undefined : { opacity: 0.6 }} />
     </Card>
     <Card>
       <CardHead title="Sessions & passwords" />
       <div style={{ padding: '18px 20px', display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(220px,1fr))', gap: 16 }}>
         <label className="label">Sign out after inactivity<select className="select" value={sec.timeout} onChange={e => setSec({ ...sec, timeout: e.target.value })}>{['30 minutes', '8 hours', '7 days', '30 days'].map(x => <option key={x}>{x}</option>)}</select></label>
-        <label className="label">Minimum password length<select className="select" value={sec.pwd} onChange={e => setSec({ ...sec, pwd: e.target.value })}>{['10', '12', '16'].map(x => <option key={x} value={x}>{x} characters</option>)}</select></label>
+        <label className="label">Minimum password length<select className="select" value={sec.pwd} onChange={e => setSec({ ...sec, pwd: e.target.value })}>{['12', '16'].map(x => <option key={x} value={x}>{x} characters</option>)}</select></label>
         <label className="label" style={{ gridColumn: '1/-1' }}>Allowed sign-in domains<input className="input" value={sec.domains} onChange={e => setSec({ ...sec, domains: e.target.value })} /><span className="hint">Comma-separated. Invitations to other domains are refused.</span></label>
       </div>
       <Foot><Btn kind="pri" onClick={() => act('settings/security', { timeout: sec.timeout, pwd: sec.pwd, domains: sec.domains }, { method: 'PATCH' })}>Save changes</Btn></Foot>

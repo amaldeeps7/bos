@@ -99,7 +99,7 @@ function TaskPanelInner({ t }: { t: Task }) {
               </div>
             ) : (
               <div key={e.id} style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
-                <Avatar name={who.name} size={32} style={{ background: '#eef4ff', color: '#0052ff' }} />
+                <Avatar name={who.name} src={who.avatar} size={32} style={{ background: '#eef4ff', color: '#0052ff' }} />
                 <div style={{ flex: 1, minWidth: 0, border: '1px solid #e2e8f0', borderRadius: 10, padding: '10px 12px' }}>
                   <p style={{ margin: 0, fontSize: 13, color: '#64748b' }}><span style={{ color: '#0f172a', fontWeight: 600 }}>{nm}</span> · {at}</p>
                   <p style={{ margin: '4px 0 0', fontSize: 14, lineHeight: 1.55, color: '#0f172a', whiteSpace: 'pre-wrap', textWrap: 'pretty' as any }}>{e.text}</p>
@@ -191,7 +191,7 @@ function MeetingPanelInner({ m }: { m: Meeting }) {
             const t = a.taskId ? tasks.find(x => x.id === a.taskId) : null; const who = person(a.assigneeId);
             return (
               <div key={a.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', border: '1px solid #e2e8f0', borderRadius: 10 }}>
-                <Avatar name={who.name} size={28} />
+                <Avatar name={who.name} src={who.avatar} size={28} />
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <p style={{ margin: 0, fontSize: 14, fontWeight: 500, textWrap: 'pretty' as any }}>{a.text}</p>
                   <p style={{ margin: '2px 0 0', fontSize: 12.5, color: '#64748b' }}>{who.name}</p>

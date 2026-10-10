@@ -12,11 +12,11 @@ export const STATUS_TONE = { available: 'success', meeting: 'primary', leave: 'w
 const initials = (n: string) => n.split(' ').filter(Boolean).map(w => w[0]).join('').slice(0, 2).toUpperCase();
 
 /** Round initials with the availability dot, as on the org chart and directory. */
-export function Face({ name, status, size = 36, accent }: { name: string; status?: TeamMember['status']; size?: number; accent?: boolean }) {
+export function Face({ name, src, status, size = 36, accent }: { name: string; src?: string | null; status?: TeamMember['status']; size?: number; accent?: boolean }) {
   return (
     <span style={{ position: 'relative', width: size, height: size, flex: 'none', borderRadius: 999, background: accent ? '#eef4ff' : '#f1f5f9', color: accent ? '#0052ff' : size <= 30 ? '#64748b' : '#475569',
       fontSize: size >= 40 ? 14 : size <= 30 ? 11 : 13, fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-      {initials(name)}
+      {src ? <img src={src} alt="" width={size} height={size} style={{ width: size, height: size, borderRadius: 999, objectFit: 'cover' }} /> : initials(name)}
       {status && <span aria-hidden="true" style={{ position: 'absolute', right: -1, bottom: -1, width: 10, height: 10, borderRadius: 999, background: STATUS_COLOR[status], border: '2px solid #fff' }} />}
     </span>
   );
@@ -32,7 +32,7 @@ export function PersonLink({ id, children, style }: { id: string; children: Reac
 export function ProfileDialog({ p, onClose }: { p: Profile; onClose: () => void }) {
   const qc = useQueryClient(); const { toast } = useApp();
   const team = useQ<TeamMember[]>(p.canManage ? 'team' : null).data || [];
-  const [f, setF] = useState({ title: p.title, dept: p.dept, managerId: p.manager?.id || '', joined: p.joined, phone: p.phone, location: p.location, hours: p.hours, leaveUntil: p.leaveUntil });
+  const [f, setF] = useState({ name: p.name, title: p.title, dept: p.dept, managerId: p.manager?.id || '', joined: p.joined, phone: p.phone, location: p.location, hours: p.hours, leaveUntil: p.leaveUntil });
   const [err, setErr] = useState(''); const [busy, setBusy] = useState(false);
   const set = (k: keyof typeof f) => (e: { target: { value: string } }) => { setF({ ...f, [k]: e.target.value }); setErr(''); };
   const depts = [...new Set(team.map(t => t.dept).filter(Boolean))].sort();
@@ -40,7 +40,11 @@ export function ProfileDialog({ p, onClose }: { p: Profile; onClose: () => void 
     setBusy(true); setErr('');
     const body: Record<string, string> = { phone: f.phone, location: f.location, hours: f.hours, leaveUntil: f.leaveUntil };
     if (p.canManage) Object.assign(body, { title: f.title, dept: f.dept, managerId: f.managerId, joined: f.joined });
-    try { const r = await api<{ message: string }>(`team/${p.id}`, { method: 'PATCH', body }); await qc.invalidateQueries(); toast(r.message); onClose(); }
+    try {
+      // Your own name is yours to change; an admin changes others' in Settings → Users.
+      if (p.isMe && f.name.trim() !== p.name) await api('me/profile', { method: 'PATCH', body: { name: f.name } });
+      const r = await api<{ message: string }>(`team/${p.id}`, { method: 'PATCH', body }); await qc.invalidateQueries(); toast(r.message); onClose();
+    }
     catch (e) { setErr(e instanceof ApiError ? e.message : 'Something went wrong.'); setBusy(false); }
   };
   const grid = { padding: '18px 20px', display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(200px,1fr))', gap: 14 } as const;
@@ -48,6 +52,7 @@ export function ProfileDialog({ p, onClose }: { p: Profile; onClose: () => void 
     <Dialog width={560} title={p.isMe ? 'Edit your profile' : `Edit ${p.name}`} sub={p.canManage ? undefined : 'Your title, team and manager are set by an admin.'} onClose={onClose}
       footer={<><Btn onClick={onClose} style={{ boxShadow: 'none' }}>Cancel</Btn><Btn kind="pri" onClick={submit} disabled={busy}>{busy ? 'Saving…' : 'Save'}</Btn></>}>
       <div style={grid}>
+        {p.isMe && <label className="label" style={{ gridColumn: '1/-1' }}>Your name<input className="input" value={f.name} onChange={set('name')} /></label>}
         {p.canManage && <>
           <label className="label">Job title<input className="input" autoFocus value={f.title} onChange={set('title')} /></label>
           <label className="label">Team<input className="input" list="team-depts" value={f.dept} onChange={set('dept')} placeholder="e.g. Delivery" /><datalist id="team-depts">{depts.map(x => <option key={x} value={x} />)}</datalist></label>

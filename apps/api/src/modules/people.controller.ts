@@ -2,6 +2,7 @@ import { Controller, Get, Post, HttpCode } from '@nestjs/common';
 import { relTime } from '@bos/shared';
 import { PrismaService } from '../core/prisma.service';
 import { Me } from '../core/decorators';
+import { avatarUrl } from '../core/avatars';
 import type { AuthUser } from '../core/auth.types';
 
 @Controller()
@@ -11,8 +12,8 @@ export class PeopleController {
   /** Everyone in the workspace, for pickers and avatars. */
   @Get('people')
   async people() {
-    const users = await this.prisma.membership.findMany({ where: { status: { not: 'Invited' } }, include: { role: true }, orderBy: { createdAt: 'asc' } });
-    return users.map(u => ({ id: u.id, name: u.name, title: u.title, role: u.role.name, email: u.email, status: u.status }));
+    const users = await this.prisma.membership.findMany({ where: { status: { not: 'Invited' } }, include: { role: true, account: { select: { avatarAt: true } } }, orderBy: { createdAt: 'asc' } });
+    return users.map(u => ({ id: u.id, name: u.name, title: u.title, role: u.role.name, email: u.email, status: u.status, avatar: avatarUrl(u.accountId, u.account.avatarAt) }));
   }
 
   @Get('notifications')

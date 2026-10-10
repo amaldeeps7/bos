@@ -56,6 +56,7 @@ export class AuthGuard implements CanActivate {
     req.user = user;
     await this.session.refresh(req, ctx.switchToHttp().getResponse(), p, user.ttl || 8 * 3600);
     // Policy says two-factor and this session didn't pass it (signed in before the rule, or before enrolling): sign in again.
+    if (user.verify && !isPublic) throw new UnauthorizedException({ statusCode: 401, code: 'verify_required', message: 'Your organisation requires a confirmed email address. Sign in again to confirm yours.' });
     if (user.mfa && !user.otp && !isPublic) throw new UnauthorizedException({ statusCode: 401, code: 'mfa_required', message: 'Your organisation requires two-factor sign-in. Sign in again to set it up.' });
     const need = this.reflector.getAllAndOverride<string[]>(PERMS, targets) || [];
     for (const perm of need) if (!AccessService.has(user, perm)) throw new ForbiddenException(`You don't have permission: ${perm}`);

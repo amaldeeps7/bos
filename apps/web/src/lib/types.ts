@@ -2,21 +2,21 @@ import type { Calc, Line } from '@bos/shared';
 
 export interface OrgRow { id: string; name: string; ini: string; slug: string; role: string; sub: string; current: boolean; setupDone?: boolean }
 export interface Me {
-  user: { id: string; accountId: string; orgId: string; name: string; email: string; title: string; roleId: string; roleName: string; builtIn: boolean; perms: string[]; modules: Record<string, boolean>; scope: any };
+  user: { id: string; accountId: string; orgId: string; name: string; email: string; title: string; roleId: string; roleName: string; builtIn: boolean; perms: string[]; modules: Record<string, boolean>; scope: any; avatar?: string | null; emailVerified?: boolean };
   org: { id: string; name: string; slug: string; ini: string; plan: string; planLabel: string; setupDone: boolean; tz: string; currency: string; fyStart: string; ourState: string; discLimit: number; sacRates: Record<string, number>; templates: any; entity: { name: string; gstin: string; address: string; bank: string; upi: string } | null };
   entities: { id: string; name: string; gst: boolean; gstin: string; state: string; isDefault: boolean; address: string; bank: string; upi: string }[];
   units: { id: string; name: string; entityId: string }[];
   orgs: OrgRow[];
   demo: boolean; serverTime: string;
 }
-export interface TeamMember { id: string; name: string; title: string; dept: string; email: string; managerId: string | null; status: 'available' | 'meeting' | 'leave'; statusLabel: string; statusText: string }
+export interface TeamMember { id: string; name: string; title: string; dept: string; email: string; managerId: string | null; avatar?: string | null; status: 'available' | 'meeting' | 'leave'; statusLabel: string; statusText: string }
 export interface Profile extends TeamMember {
   phone: string; location: string; hours: string; joined: string; leaveUntil: string;
   manager: { id: string; name: string } | null; reports: { id: string; name: string }[];
   projects: { id: string; name: string; customer: string; open: number }[];
-  isMe: boolean; canEdit: boolean; canManage: boolean; calendar?: boolean; prefs?: { remind: boolean; mention: boolean; digest: boolean };
+  isMe: boolean; canEdit: boolean; canManage: boolean; calendar?: boolean; prefs?: { remind: boolean; mention: boolean; digest: boolean }; emailVerified?: boolean;
 }
-export interface Person { id: string; name: string; title: string; role: string; email: string; status: string }
+export interface Person { id: string; name: string; title: string; role: string; email: string; status: string; avatar?: string | null }
 export interface TaskEvent { id: string; userId: string; kind: 'comment' | 'sys'; text: string; at: string }
 export interface Task { id: string; key: string; title: string; desc: string; projectId: string; assigneeId: string; reporterId: string; due: string; status: string; priority: string; events: TaskEvent[]; block: { start: number; dur: number } | null }
 export interface ActionItem { id: string; text: string; assigneeId: string; taskId: string | null }

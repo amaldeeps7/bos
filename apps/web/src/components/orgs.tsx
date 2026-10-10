@@ -6,7 +6,7 @@ import { api, ApiError } from '@/lib/api';
 import { useAct, useApp, useQ } from '@/lib/app';
 import type { SetupState } from '@/lib/types';
 import { Btn, Icon } from './ui';
-import { Challenge, continueSignIn } from './mfa';
+import { Challenge, continueSignIn, isChallenge } from './mfa';
 
 const ini = (n: string) => n.trim().split(/\s+/).filter(Boolean).map(w => w[0]).join('').slice(0, 2).toUpperCase();
 const FLASH = 'bos_flash';
@@ -17,7 +17,7 @@ export const flashNext = (m: string) => { try { sessionStorage.setItem(FLASH, m)
 /** Switches the session to another organisation, then reloads so every cached record is dropped. */
 export async function switchOrg(id: string, name: string, setupDone?: boolean) {
   const r = await api<Partial<Challenge>>('auth/switch', { body: { orgId: id } });
-  if (r.mfa && r.ticket) return continueSignIn(r as Challenge); // that organisation asks for a code
+  if (isChallenge(r)) return continueSignIn(r); // that organisation asks for a code, or a confirmed email
   flashNext(`Switched to ${name}.`);
   location.href = setupDone === false ? '/setup' : '/';
 }
@@ -97,7 +97,7 @@ export function OrgWizard({ onClose, account = false }: { onClose: () => void; a
         numbering: { inv: ob.inv, qt: ob.qt, pattern: ob.pattern }, invites: ob.invites.filter(x => x.email.trim()),
         ...(account ? { account: { name: ob.you.trim(), email: ob.email.trim().toLowerCase(), password: ob.password } } : {}),
       } });
-      flashNext(r.message); if (r.mfa && r.ticket) return continueSignIn(r as Challenge, 'setup'); location.href = '/setup';
+      flashNext(r.message); if (isChallenge(r)) return continueSignIn(r, 'setup'); location.href = '/setup';
     } catch (e) { err(e instanceof ApiError ? e.message : 'Something went wrong. Try again.'); }
   };
   const back = () => (ob.step ? setOb(o => ({ ...o, step: o.step - 1, err: '' })) : onClose());

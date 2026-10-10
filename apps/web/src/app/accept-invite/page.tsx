@@ -2,7 +2,7 @@
 import { FormEvent, Suspense, useEffect, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { api, ApiError } from '@/lib/api';
-import { Challenge, continueSignIn } from '@/components/mfa';
+import { Challenge, continueSignIn, isChallenge } from '@/components/mfa';
 
 function Accept() {
   const token = useSearchParams().get('token') || '';
@@ -19,7 +19,7 @@ function Accept() {
     setBusy(true);
     try {
       const r = await api<Partial<Challenge>>('auth/accept-invite', { body: { token, name: f.name, title: f.title, password: f.password } });
-      if (r.mfa && r.ticket) return continueSignIn(r as Challenge); // the organisation asks for two-factor
+      if (isChallenge(r)) return continueSignIn(r); // the organisation asks for two-factor
       location.href = '/';
     }
     catch (x) { setErr(x instanceof ApiError ? x.message : 'Could not finish joining.'); setBusy(false); }

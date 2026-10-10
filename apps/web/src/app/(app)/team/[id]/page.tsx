@@ -8,7 +8,8 @@ import { Back, Badge, Btn, Card, CardHead, Icon, Switch } from '@/components/ui'
 import { useOpenNewMeeting } from '@/components/dialogs';
 import { Face, PersonLink, ProfileDialog, STATUS_TONE } from '@/components/team';
 import { MfaCard } from '@/components/mfa';
-import { PasswordCard, SessionsCard } from '@/components/account';
+import { PhotoPicker } from '@/components/photo';
+import { DangerCard, EmailCard, PasswordCard, SessionsCard } from '@/components/account';
 import { signOut } from '@/lib/api';
 
 const tzShort = (tz: string) => { try { return new Intl.DateTimeFormat('en-IN', { timeZone: tz, timeZoneName: 'short' }).formatToParts(new Date()).find(p => p.type === 'timeZoneName')?.value || ''; } catch { return ''; } };
@@ -36,7 +37,7 @@ export default function PersonPage() {
       <Back label="Team" onClick={() => router.push('/team')} />
       <Card style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 18 }}>
         <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-start', gap: '16px 20px' }}>
-          <span style={{ width: 64, height: 64, flex: 'none', borderRadius: 999, background: '#eef4ff', color: '#0052ff', fontSize: 22, fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{p.name.split(' ').map(w => w[0]).join('').slice(0, 2)}</span>
+          <PhotoPicker name={p.name} src={p.avatar} editable={p.isMe} />
           <div style={{ flex: '1 1 240px', minWidth: 0 }}>
             <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px 12px' }}>
               <h1 style={{ margin: 0, fontSize: 24, fontWeight: 600, letterSpacing: '-0.02em' }}>{p.name}</h1>
@@ -96,7 +97,7 @@ export default function PersonPage() {
         </Card>
       )}
 
-      {p.isMe && <><PasswordCard /><MfaCard /><SessionsCard /></>}
+      {p.isMe && <><EmailCard email={p.email} verified={!!p.emailVerified} /><PasswordCard /><MfaCard /><SessionsCard /><DangerCard isOwner={me.user.roleName === 'Owner' && me.user.builtIn} orgName={me.org.name} email={me.user.email} /></>}
 
       {editing && <ProfileDialog p={p} onClose={() => setEditing(false)} />}
     </>

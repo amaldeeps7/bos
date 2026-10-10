@@ -62,7 +62,7 @@ export default function Meetings() {
                   </div>
                   <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10, marginLeft: 88 }}>
                     <div style={{ display: 'flex', paddingLeft: 6 }}>
-                      {m.attendees.slice(0, 4).map(w => <Avatar key={w} name={person(w).name} size={26} style={{ marginLeft: -6, border: '2px solid #fff', fontSize: 10 }} />)}
+                      {m.attendees.slice(0, 4).map(w => <Avatar key={w} name={person(w).name} src={person(w).avatar} size={26} style={{ marginLeft: -6, border: '2px solid #fff', fontSize: 10 }} />)}
                       {m.attendees.length > 4 && <span style={{ width: 26, height: 26, marginLeft: -6, border: '2px solid #fff', borderRadius: 999, background: '#e2e8f0', color: '#475569', fontSize: 10, fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>+{m.attendees.length - 4}</span>}
                     </div>
                     {tag && <Badge tone={tag[1]}>{tag[0]}</Badge>}

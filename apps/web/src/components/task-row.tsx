@@ -58,7 +58,7 @@ export function TaskListRow({ t, p }: { t: Task; p?: Project }) {
         {['doing', 'review', 'blocked'].includes(t.status) && <Badge tone={st[1]}>{st[0]}</Badge>}
         <button className="quiet" onClick={() => a.open(t)} aria-label="Comments" style={{ display: 'flex', alignItems: 'center', gap: 4, width: 40, color: '#94a3b8' }}><Icon name="message-square" size={14} />{comments}</button>
         <span style={{ ...badgeStyle(prioTone(t.priority) as any), width: 70, justifyContent: 'center' }}>{t.priority}</span>
-        <span style={{ display: 'flex', alignItems: 'center', gap: 8, width: 130, fontSize: 14 }}><Avatar name={who.name} />{who.name}</span>
+        <span style={{ display: 'flex', alignItems: 'center', gap: 8, width: 130, fontSize: 14 }}><Avatar name={who.name} src={who.avatar} />{who.name}</span>
         <span style={d.style}>{d.label}</span>
       </div>
     </div>

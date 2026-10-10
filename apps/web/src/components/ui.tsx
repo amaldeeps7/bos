@@ -88,8 +88,10 @@ export function Check({ on, onClick, locked, label, style }: { on: boolean; onCl
   );
 }
 
-export function Avatar({ name, size = 24, style }: { name: string; size?: number; style?: CSSProperties }) {
+/** Someone's photo, or their initials when they haven't added one. */
+export function Avatar({ name, src, size = 24, style }: { name: string; src?: string | null; size?: number; style?: CSSProperties }) {
   const t = name.split(' ').filter(Boolean).map(w => w[0]).join('').slice(0, 2).toUpperCase();
+  if (src) return <img src={src} alt="" title={name} width={size} height={size} style={{ width: size, height: size, flex: 'none', borderRadius: 999, objectFit: 'cover', background: '#f1f5f9', ...style }} />;
   return <span title={name} style={{ width: size, height: size, flex: 'none', borderRadius: 999, background: '#f1f5f9', color: '#64748b', fontSize: size <= 24 ? 11 : size <= 28 ? 11 : 12, fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', ...style }}>{t}</span>;
 }
 

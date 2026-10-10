@@ -96,7 +96,7 @@ export default function ProjectDetail() {
           {memberIds.map(uid => { const u = person(uid); const n = tasks.filter(t => t.assigneeId === uid && t.status !== 'done').length;
             return (
               <div key={uid} onClick={() => router.push(`/team/${uid}`)} className="hov-row" role="link" style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 20px', cursor: 'pointer' }}>
-                <Avatar name={u.name} size={32} />
+                <Avatar name={u.name} src={u.avatar} size={32} />
                 <div style={{ flex: 1, minWidth: 0 }}><p style={{ margin: 0, fontSize: 14, fontWeight: 500 }}>{u.name}</p><p style={{ margin: 0, fontSize: 13, color: '#64748b' }}>{uid === p.ownerId ? 'Project owner' : u.title}</p></div>
                 <div style={{ width: 96 }}>
                   <div style={{ height: 6, borderRadius: 999, background: '#f1f5f9', overflow: 'hidden' }}><div style={{ height: '100%', width: Math.min(100, n / 7 * 100) + '%', borderRadius: 999, background: n >= 6 ? '#be123c' : n >= 4 ? '#b45309' : '#047857' }} /></div>

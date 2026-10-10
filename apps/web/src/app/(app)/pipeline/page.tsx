@@ -36,7 +36,7 @@ export default function Pipeline() {
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <span className="num" style={{ fontSize: 15, fontWeight: 600 }}>{inr(o.value)}</span>
                   <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <Avatar name={person(o.ownerId).name} />
+                    <Avatar name={person(o.ownerId).name} src={person(o.ownerId).avatar} />
                     {o.stage < 4 && has('customer.update') && <button onClick={() => act(`opportunities/${o.id}/advance`)} aria-label="Move to next stage" title="Move to next stage" className="adv" style={{ width: 28, height: 28, border: '1px solid #cbd5e1', borderRadius: 6, background: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#64748b' }}><Icon name="arrow-right" size={14} /></button>}
                   </span>
                 </div>

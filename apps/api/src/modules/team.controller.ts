@@ -6,6 +6,7 @@ import { AuditService } from '../core/audit.service';
 import { OrgService } from '../core/org.service';
 import { Me } from '../core/decorators';
 import type { AuthUser } from '../core/auth.types';
+import { avatarUrl } from '../core/avatars';
 import { d, str, toDate } from '../core/util';
 
 const PREF_KEYS = ['remind', 'mention', 'digest'] as const;
@@ -34,18 +35,18 @@ export class TeamController {
   }
 
   private card(u: any, st: ReturnType<Awaited<ReturnType<TeamController['statuses']>>>) {
-    return { id: u.id, name: u.name, title: u.title, dept: u.dept, email: u.email, managerId: u.managerId, ...st };
+    return { id: u.id, name: u.name, title: u.title, dept: u.dept, email: u.email, managerId: u.managerId, avatar: avatarUrl(u.accountId, u.account?.avatarAt), ...st };
   }
 
   @Get('team')
   async team() {
-    const [users, st] = await Promise.all([this.prisma.membership.findMany({ where: { status: 'Active' }, orderBy: { createdAt: 'asc' } }), this.statuses()]);
+    const [users, st] = await Promise.all([this.prisma.membership.findMany({ where: { status: 'Active' }, include: { account: { select: { avatarAt: true } } }, orderBy: { createdAt: 'asc' } }), this.statuses()]);
     return users.map(u => this.card(u, st(u)));
   }
 
   @Get('team/:id')
   async person(@Me() me: AuthUser, @Param('id') id: string) {
-    const u = await this.prisma.membership.findFirst({ where: { id, status: { not: 'Invited' } }, include: { manager: true, reports: { where: { status: 'Active' }, orderBy: { createdAt: 'asc' } } } });
+    const u = await this.prisma.membership.findFirst({ where: { id, status: { not: 'Invited' } }, include: { account: { select: { avatarAt: true, email: true, emailVerifiedAt: true } }, manager: true, reports: { where: { status: 'Active' }, orderBy: { createdAt: 'asc' } } } });
     if (!u) throw new NotFoundException('Person not found');
     const st = await this.statuses();
     let projects: { id: string; name: string; customer: string; open: number }[] = [];
@@ -67,7 +68,7 @@ export class TeamController {
       manager: u.manager && u.manager.status !== 'Deactivated' ? { id: u.manager.id, name: u.manager.name } : null,
       reports: u.reports.map(r => ({ id: r.id, name: r.name })),
       projects, isMe, canEdit: isMe || AccessService.has(me, 'user.manage'), canManage: AccessService.has(me, 'user.manage'),
-      ...(isMe ? { calendar: u.calendar, prefs: prefsOf(u.prefs) } : {}),
+      ...(isMe ? { calendar: u.calendar, prefs: prefsOf(u.prefs), emailVerified: !!u.account.emailVerifiedAt } : {}),
     };
   }
 
