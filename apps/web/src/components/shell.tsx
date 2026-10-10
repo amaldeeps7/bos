@@ -1,5 +1,5 @@
 'use client';
-import { ReactNode, useEffect } from 'react';
+import { ReactNode, useEffect, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { diffDays } from '@bos/shared';
 import { useAct, useApp, useQ } from '@/lib/app';
@@ -42,7 +42,8 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   const canAi = can('ai');
   const aiOpen = canAi && (ui.aiOpen ?? (!isMobile && wide));
-  const go = (href: string) => { setUi({ notifOpen: false, aiOpen: isMobile ? false : ui.aiOpen }); router.push(href); document.querySelector('main')?.scrollTo(0, 0); };
+  const [more, setMore] = useState(false);
+  const go = (href: string) => { setMore(false); setUi({ notifOpen: false, aiOpen: isMobile ? false : ui.aiOpen }); router.push(href); document.querySelector('main')?.scrollTo(0, 0); };
   const item = (id: string, href: string, label: string, icon: string, count?: number) => ({ id, href, label, icon, count, active: screen === id || parent[screen] === id });
   const groups = fresh ? [{ label: '', items: [item('setup', '/setup', 'Get started', 'icon-rocket')] }] : [
     { label: '', items: [item('mywork', '/', 'My Work', 'icon-house'), can('tasks') && item('tasks', '/tasks', 'Tasks', 'icon-list-checks'), item('meetings', '/meetings', 'Meetings', 'icon-calendar'), item('team', '/team', 'Team', 'icon-users'), can('approvals') && item('approvals', '/approvals', 'Approvals', 'icon-badge-check', waiting)] },
@@ -53,8 +54,12 @@ export function AppShell({ children }: { children: ReactNode }) {
     { label: 'Organisation', items: [canSettings && item('settings', '/settings', 'Settings', 'icon-settings-2')] },
   ].map(g => ({ ...g, items: g.items.filter(Boolean) as ReturnType<typeof item>[] })).filter(g => g.items.length);
 
+  // Mobile bottom bar: the four everyday screens, then "More" for everything else.
   const tabs = fresh ? [item('setup', '/setup', 'Get started', 'icon-rocket')] : [item('mywork', '/', 'My Work', 'icon-house'), can('tasks') && item('tasks', '/tasks', 'Tasks', 'icon-list-checks'), item('meetings', '/meetings', 'Meetings', 'icon-calendar', leftToday),
-    can('projects') && item('projects', '/projects', 'Projects', 'icon-folder-kanban'), can('approvals') && item('approvals', '/approvals', 'Approvals', 'icon-badge-check', waiting)].filter(Boolean) as ReturnType<typeof item>[];
+    can('approvals') && item('approvals', '/approvals', 'Approvals', 'icon-badge-check', waiting)].filter(Boolean) as ReturnType<typeof item>[];
+  useEffect(() => { setMore(false); }, [path]);
+  useEffect(() => { if (!more) return; const k = (e: KeyboardEvent) => { if (e.key === 'Escape') setMore(false); }; window.addEventListener('keydown', k); return () => window.removeEventListener('keydown', k); }, [more]);
+  const onTab = tabs.some(t => t.active);
 
   const orgIni = me.org.ini || me.org.name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
   const toggleOrgs = () => setUi({ orgMenu: !ui.orgMenu, notifOpen: false });
@@ -176,7 +181,43 @@ export function AppShell({ children }: { children: ReactNode }) {
                   </button>
                 );
               })}
+              <button onClick={() => setMore(!more)} aria-label="More" aria-expanded={more} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, padding: '6px 0', border: 0, background: 'transparent', cursor: 'pointer', fontSize: 11, fontWeight: 500, color: more || (!aiOpen && !onTab) ? '#0052ff' : '#64748b', minHeight: 48 }}>
+                <span style={{ lineHeight: 1 }}><Icon name={more ? 'x' : 'layout-grid'} size={21} /></span>
+                <span>More</span>
+              </button>
             </nav>
+          )}
+          {isMobile && more && (
+            <>
+              <div onClick={() => setMore(false)} style={{ position: 'absolute', inset: 0, bottom: 64, zIndex: 40, background: 'rgba(15,23,42,.35)' }} />
+              <div role="dialog" aria-label="All menus" style={{ position: 'absolute', left: 0, right: 0, bottom: 64, zIndex: 41, maxHeight: 'calc(100% - 120px)', overflowY: 'auto', background: '#fff', borderRadius: '16px 16px 0 0', boxShadow: '0 -16px 48px -12px rgba(15,23,42,.25)', padding: '8px 16px 16px' }}>
+                <div style={{ width: 36, height: 4, borderRadius: 999, background: '#e2e8f0', margin: '0 auto 12px' }} />
+                <div style={{ display: 'flex', gap: 8, marginBottom: 6 }}>
+                  <button onClick={() => go(`/team/${me.user.id}`)} className="hov-soft" style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 10, padding: 8, border: '1px solid #e2e8f0', borderRadius: 12, background: '#fff', cursor: 'pointer', textAlign: 'left' }}>
+                    <span style={{ width: 36, height: 36, flex: 'none', borderRadius: 999, background: '#f1f5f9', color: '#475569', fontSize: 13, fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{myIni}</span>
+                    <span style={{ minWidth: 0 }}><span className="ellipsis" style={{ display: 'block', fontSize: 14, fontWeight: 600 }}>{me.user.name}</span><span className="ellipsis" style={{ display: 'block', fontSize: 12, color: '#64748b' }}>{ui.viewAs || me.user.roleName} · Your profile</span></span>
+                  </button>
+                  <button onClick={() => { setMore(false); setUi({ orgMenu: true }); }} aria-label="Switch organisation" className="hov-soft" style={{ flex: 'none', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 2, width: 76, border: '1px solid #e2e8f0', borderRadius: 12, background: '#fff', cursor: 'pointer', fontSize: 11, color: '#475569' }}>
+                    <span style={{ width: 26, height: 26, borderRadius: 7, backgroundImage: 'linear-gradient(135deg,#0052ff,#4d7cff)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 600 }}>{orgIni}</span>Switch
+                  </button>
+                </div>
+                {groups.map(g => (
+                  <div key={g.label || 'home'} style={{ marginTop: 12 }}>
+                    <p style={{ margin: '0 0 6px', fontSize: 12, fontWeight: 600, letterSpacing: '.04em', textTransform: 'uppercase', color: '#94a3b8' }}>{g.label || 'Work'}</p>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,minmax(0,1fr))', gap: 6 }}>
+                      {g.items.map(it => (
+                        <button key={it.id} onClick={() => go(it.href)} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, padding: '10px 2px', border: 0, borderRadius: 12, background: it.active ? '#eef4ff' : 'transparent', cursor: 'pointer', color: it.active ? '#0052ff' : '#334155', fontSize: 12, fontWeight: it.active ? 600 : 500, minWidth: 0 }}>
+                          <span style={{ position: 'relative', width: 44, height: 44, borderRadius: 12, background: it.active ? '#fff' : '#f1f5f9', color: it.active ? '#0052ff' : '#475569', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                            <Icon name={it.icon} size={21} />{!!it.count && <Count n={it.count} small />}
+                          </span>
+                          <span className="ellipsis" style={{ maxWidth: '100%' }}>{it.label}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </>
           )}
         </div>
 
