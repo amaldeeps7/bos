@@ -73,7 +73,9 @@ The API suite runs the API as `bos_app`, so row-level security is exercised for 
 - **People.** Admins can add someone directly with a password they set (optionally sending a welcome email), or invite by email: the invitee gets a 7-day link to choose their own password. Names, job titles, roles and passwords can be changed later.
 - **Team.** An org chart built from each person's manager, and a searchable directory, both showing who is available, in a meeting right now, or on leave. A profile shows contact details, reporting line, direct reports and the projects someone works on, with Schedule meeting and Assign task. People edit their own phone, location, working hours and leave dates; anyone with `user.manage` also sets title, team, manager and joining date (reporting loops are refused). Names elsewhere in the app (meeting attendees, task reporters, project people, search results) open the profile.
 - **Your settings** (on your own profile, reached from your name at the bottom of the sidebar or the avatar on mobile): turn calendar invites on or off, meeting reminders (emailed and notified 10 minutes before, with the join link), comment emails on your tasks, and the 8:30 am daily digest of meetings, due tasks and approvals. Reminders and the digest run inside the API once a minute; Redis makes sure each goes out once even with several API instances. Set `SCHEDULER=off` to disable them. Sign out is here too.
-- **Assistant.** Suggested questions are answered from live records by the API. Free-text questions go to Claude (`claude-opus-5-5`, server-side refusal fallback enabled) when `ANTHROPIC_API_KEY` is set; otherwise the assistant says so.
+- **Assistant.** Two modes, chosen by whether `ANTHROPIC_API_KEY` is set on the API:
+  - *Without a key*, the suggested questions ("Plan my day", "Who owes us the most?") are answered by built-in code from live records, and a typed question is matched to the closest of those answers.
+  - *With a key*, typed questions go to an agent (Claude, `claude-opus-5-5`) that looks things up with tools — search, your day, tasks, a project, invoices, a customer, calendars, the team, the pipeline, approvals — running as the signed-in person, so their role, access scope and organisation (row-level security) apply to every lookup; it only gets the tools their role allows. It can *propose* changes — create or update a task, schedule a meeting, email a payment reminder, comment on a task — which appear as Confirm/Dismiss cards; Confirm makes the same API call you'd make yourself, with your permissions and the audit log. The answer streams as it's written. The conversation is kept on the server for 4 hours (per person and organisation). If Claude is unavailable, the question falls back to the closest built-in answer. Suggestion chips always use the built-in answers (instant, no AI cost). Requests count toward the "Assistant requests" usage meter.
 
 ## Where things are
 
@@ -84,6 +86,7 @@ The API suite runs the API as `bos_app`, so row-level security is exercised for 
 | Task ticket panel, meeting record | `apps/web/src/components/overlays.tsx` |
 | Dialogs (meeting, task, customer, payment, credit note) | `apps/web/src/components/dialogs.tsx` |
 | Quotation / invoice view and editor | `apps/web/src/components/docs.tsx` |
+| Assistant agent (tools, loop, streaming) | `apps/api/src/modules/agent/`, `apps/api/src/modules/ai.controller.ts`, `apps/web/src/components/assistant.tsx` |
 | Settings (all sections, permission matrix, email log) | `apps/web/src/components/settings.tsx` |
 | Organisation menu, new-organisation wizard, Get started | `apps/web/src/components/orgs.tsx` |
 | Plan & billing, Data & export, add legal entity | `apps/web/src/components/workspace.tsx` |

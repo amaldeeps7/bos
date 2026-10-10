@@ -386,3 +386,65 @@ describe('multitenancy (spec §9)', () => {
     await http().post('/api/auth/login').send({ email: 'kiran@kestrel-advisory.in', password: 'kestrel-password-1' }).expect(401);
   });
 });
+
+describe('assistant: built-in answers without a key, agent with one', () => {
+  const http = () => request(app.getHttpServer());
+
+  it('matches typed questions to the built-in answers when Claude isn’t connected', async () => {
+    const { AgentService } = await import('../src/modules/agent/agent.service');
+    const agent = app.get(AgentService); const saved = agent.client; agent.client = null;
+    try {
+      const pm = await login('priya@democonsulting.in');
+      expect((await http().get('/api/ai/status').set('Cookie', pm)).body.agent).toBe(false);
+      const r = (await http().post('/api/ai/ask').set('Cookie', pm).send({ question: 'what is on my plate today?' }).expect(200)).body;
+      expect(r.text).not.toMatch(/ANTHROPIC_API_KEY/);
+      const none = (await http().post('/api/ai/ask').set('Cookie', pm).send({ question: 'tell me a joke' }).expect(200)).body;
+      expect(none.text).toMatch(/ANTHROPIC_API_KEY/);
+    } finally { agent.client = saved; }
+  });
+
+  it('runs tools as the user, streams the answer, and only proposes changes', async () => {
+    const { AgentService } = await import('../src/modules/agent/agent.service');
+    const agent = app.get(AgentService); const saved = agent.client;
+    const calls: any[] = [];
+    // A scripted stand-in for the Claude client: look up overdue invoices, propose a reminder, then answer.
+    const script = [
+      (p: any) => ({ content: [{ type: 'tool_use', id: 'tu_1', name: 'list_invoices', input: { filter: 'overdue' } }], stop_reason: 'tool_use' }),
+      (p: any) => {
+        const res = JSON.parse(p.messages.at(-1).content[0].content);
+        return { content: [{ type: 'tool_use', id: 'tu_2', name: 'propose_payment_reminder', input: { invoice: res[0].no } }], stop_reason: 'tool_use' };
+      },
+      () => ({ content: [{ type: 'text', text: 'One invoice is overdue. The reminder is ready to confirm.' }], stop_reason: 'end_turn' }),
+      () => ({ content: [{ type: 'text', text: 'Still here.' }], stop_reason: 'end_turn' }),
+    ];
+    agent.client = { beta: { messages: { stream: (p: any) => {
+      calls.push(JSON.parse(JSON.stringify(p))); const m = script[calls.length - 1](p); const handlers: ((t: string) => void)[] = [];
+      return { on: (_: string, f: (t: string) => void) => handlers.push(f), finalMessage: async () => { m.content.filter((b: any) => b.type === 'text').forEach((b: any) => handlers.forEach(h => h(b.text))); return m; } };
+    } } } } as any;
+    try {
+      const fin = await login('meera@democonsulting.in');
+      expect((await http().get('/api/ai/status').set('Cookie', fin)).body.agent).toBe(true);
+      const sse = (await http().post('/api/ai/agent').set('Cookie', fin).send({ question: 'Chase overdue invoices', conversationId: 'test-conversation-1' }).expect(200)).text;
+      const ev = sse.split('\n\n').filter(Boolean).map(l => JSON.parse(l.replace(/^data: /, '')));
+      expect(ev.map(e => e.type)).toEqual(['status', 'status', 'proposal', 'text', 'done']);
+      const prop = ev.find(e => e.type === 'proposal').proposal;
+      expect(prop).toMatchObject({ method: 'POST', path: expect.stringMatching(/^invoices\/.+\/remind$/), body: {} });
+      // The model only ever sees the tools this role may use, and the request opts into the refusal fallback.
+      expect(calls[0].tools.map((t: any) => t.name)).toContain('list_invoices');
+      expect(calls[0].fallbacks).toBe('default');
+      // Nothing changed: a reminder is only sent when the person confirms (the panel makes this exact call).
+      await http().post(`/api/${prop.path}`).set('Cookie', fin).send(prop.body).expect(200);
+
+      // Same conversation: history is replayed unchanged and appended to.
+      await http().post('/api/ai/agent').set('Cookie', fin).send({ question: 'Thanks', conversationId: 'test-conversation-1' }).expect(200);
+      const before = calls[2].messages; const after = calls[3].messages;
+      expect(after.slice(0, before.length + 1)).toEqual([...before, { role: 'assistant', content: [{ type: 'text', text: 'One invoice is overdue. The reminder is ready to confirm.' }] }]);
+
+      // Field staff never get finance tools.
+      const field = await login('arjun@democonsulting.in');
+      calls.length = 0; script.splice(0, script.length, () => ({ content: [{ type: 'text', text: 'ok' }], stop_reason: 'end_turn' }));
+      await http().post('/api/ai/agent').set('Cookie', field).send({ question: 'hi' }).expect(200);
+      expect(calls[0].tools.map((t: any) => t.name)).not.toContain('list_invoices');
+    } finally { agent.client = saved; }
+  });
+});

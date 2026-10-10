@@ -1,4 +1,6 @@
-import { BadRequestException, Body, Controller, HttpCode, Logger, Post } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, HttpCode, Logger, Post, Req, Res } from '@nestjs/common';
+import type { Request, Response } from 'express';
+import { AgentEvent, AgentService, MODEL } from './agent/agent.service';
 import Anthropic from '@anthropic-ai/sdk';
 import { PERM_GROUPS, addDays, diffDays, fmtD, inr, permLabel } from '@bos/shared';
 import { PrismaService } from '../core/prisma.service';
@@ -13,15 +15,16 @@ import { FinanceService } from './finance.service';
 type Action = { label: string; kind: 'navigate' | 'reassign' | 'copy' | 'remind'; payload?: Record<string, string> };
 type Reply = { text: string; bullets?: string[]; action?: Action };
 
-const MODEL = process.env.ANTHROPIC_MODEL || 'claude-opus-5-5';
 
-/** The assistant. Suggested questions are answered from live records; free text goes to Claude when a key is configured. */
+/**
+ * The assistant. Suggested questions are answered by built-in code from live records (instant, no AI).
+ * Typed questions go to the Claude agent when ANTHROPIC_API_KEY is set, otherwise to the closest built-in answer.
+ */
 @Controller('ai')
 export class AiController {
   private log = new Logger('AI');
-  private client: Anthropic | null = process.env.ANTHROPIC_API_KEY ? new Anthropic() : null;
 
-  constructor(private prisma: PrismaService, private fin: FinanceService, private redis: RedisService) {}
+  constructor(private prisma: PrismaService, private fin: FinanceService, private redis: RedisService, private agent: AgentService) {}
 
   /** Counts assistant requests per organisation per month (Settings → Plan & billing → Usage). */
   private count() { return this.redis.hit(`bos:${orgId()}:ai:${new Date().toISOString().slice(0, 7)}`, 40 * 86400); }
@@ -149,38 +152,74 @@ export class AiController {
   }
 
   /** Free-text question, answered by Claude from the records this person can see. */
+  /** Whether typed questions go to the Claude agent (API key set) or are matched to the built-in answers. */
+  @Get('status') @Perm('ai.use')
+  status() { return { agent: this.agent.enabled, model: this.agent.enabled ? MODEL : null }; }
+
+  /** Typed question without the agent (no API key, or as a fallback): answer with the closest built-in answer. */
   @Post('ask') @HttpCode(200) @Perm('ai.use')
   async ask(@Me() me: AuthUser, @Body() b: any): Promise<Reply> {
-    await this.count();
     const q = str(b.question, 'Question', { max: 1000 }).trim();
     if (!q) throw new BadRequestException('Ask a question');
-    const fallback = { text: 'I can answer the suggested questions below. Free-text questions need an Anthropic API key — set ANTHROPIC_API_KEY on the API server.' };
-    if (!this.client) return fallback;
-    const D = await this.data(me); const today = D.c.today;
-    const ctx = {
-      me: `${me.name}, ${me.roleName}`, today: fmtD(today),
-      projects: D.projects.map(p => ({ name: p.name, customer: p.customer.name, health: p.health, milestones: p.milestones.map(m => `${m.name} ${m.status} due ${fmtD(d(m.due))} ${inr(m.value)}`) })),
-      tasks: D.tasks.filter(t => t.status !== 'done').map(t => `${t.title} — ${D.name(t.assigneeId)}, ${t.status}, due ${fmtD(d(t.due))}`),
-      approvals: D.approvals.map(a => a.title),
-      ...(AccessService.has(me, 'invoice.read') ? { invoices: D.invoices.map(i => { const f = this.fin.invInfo(i, D.c); return `${i.no} ${i.customer.name} ${f.st} total ${inr(f.k.grand)} balance ${inr(f.bal)} due ${fmtD(d(i.due))}`; }) } : {}),
-      next7days: addDays(today, 7),
-    };
-    try {
-      const params: any = {
-        model: MODEL, max_tokens: 2000,
-        output_config: { effort: 'low' },
-        betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default',
-        system: 'You are the assistant inside a business operating system for a services company. Answer briefly — under 90 words, plain text, no markdown — using only the JSON records provided. If the records don’t answer the question, say so.',
-        messages: [{ role: 'user', content: `Records:\n${JSON.stringify(ctx)}\n\nQuestion: ${q}` }],
-      };
-      const res = await this.client.beta.messages.create(params) as any;
-      if (res.stop_reason === 'refusal') return { text: 'I can’t help with that one. Try one of the suggestions below.' };
-      const text = (res.content as any[]).filter(x => x.type === 'text').map(x => x.text).join('').trim();
-      return { text: text || fallback.text };
-    } catch (e) {
-      if (e instanceof Anthropic.RateLimitError) return { text: 'The assistant is busy right now. Try again in a moment.' };
-      if (e instanceof Anthropic.APIError) { this.log.warn(`Claude API error ${e.status}: ${e.message}`); return { text: 'The assistant couldn’t answer just now. Try one of the suggestions below.' }; }
-      throw e;
-    }
+    const key = matchIntent(q, me);
+    if (key) return this.suggest(me, { key, projectId: b.projectId });
+    return { text: this.agent.enabled ? 'The assistant couldn’t answer just now. Try again, or pick one of the suggestions below.'
+      : 'I can answer things like “plan my day”, “what’s at risk this week?”, “who owes us the most?” or “chase overdue invoices”. For any other question, an admin can connect Claude by setting ANTHROPIC_API_KEY on the API server.' };
   }
+
+  /**
+   * The agent: streams its answer as Server-Sent Events. It reads records with tools (as you, inside your organisation)
+   * and proposes changes you confirm in the panel. Without an API key this route isn't used (see GET ai/status).
+   */
+  @Post('agent') @Perm('ai.use')
+  async agentAsk(@Me() me: AuthUser, @Body() b: any, @Req() req: Request, @Res() res: Response) {
+    const q = str(b.question, 'Question', { max: 2000 }).trim();
+    if (!q) throw new BadRequestException('Ask a question');
+    if (!this.agent.enabled) throw new BadRequestException('The agent isn’t configured on this server.');
+    await this.count();
+    res.status(200).set({ 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache, no-transform', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
+    res.flushHeaders();
+    const send = (e: AgentEvent) => { if (!res.writableEnded) res.write(`data: ${JSON.stringify(e)}\n\n`); };
+    const abort = new AbortController();
+    res.on('close', () => { if (!res.writableFinished) abort.abort(); });
+    try {
+      await this.agent.run(me, String(b.conversationId || ''), q, str(b.page, 'Page', { max: 300 }), send, abort.signal);
+    } catch (e) {
+      if (!abort.signal.aborted) {
+        if (e instanceof Anthropic.RateLimitError) send({ type: 'error', text: 'The assistant is busy right now. Try again in a moment.' });
+        else if (e instanceof Anthropic.AuthenticationError) { this.log.error('Anthropic API key was rejected'); send({ type: 'error', text: 'The assistant’s API key was rejected. An admin needs to check ANTHROPIC_API_KEY.' }); }
+        else if (e instanceof Anthropic.APIError) { this.log.warn(`Claude API error ${e.status}: ${e.message}`); send({ type: 'error', text: 'The assistant couldn’t answer just now.' }); }
+        else { this.log.error(e); send({ type: 'error', text: 'Something went wrong while answering.' }); }
+        // Fall back to the built-in answers when one fits.
+        const key = matchIntent(q, me);
+        if (key) { const r = await this.suggest(me, { key }).catch(() => null); if (r) send({ type: 'fallback', reply: r } as any); }
+      }
+    }
+    res.end();
+  }
+
+  @Post('agent/forget') @HttpCode(200) @Perm('ai.use')
+  async forget(@Me() me: AuthUser, @Body() b: any) { await this.agent.forget(me, String(b.conversationId || '')); return { ok: true }; }
+}
+
+/** Typed question → the closest built-in answer, for when Claude isn't connected. */
+const INTENTS: [RegExp, string, string?][] = [
+  [/\b(plan|schedule|agenda)\b.*\b(day|today)\b|\bmy day\b|what('?s| is) (on )?(today|my plate)/i, 'plan'],
+  [/\brisk|slipp|behind|late projects?\b/i, 'risk', 'project.read'],
+  [/status (update|report)|update (for|to) (the )?customer/i, 'status', 'project.read'],
+  [/overdue|chase|remind/i, 'overdue', 'invoice.read'],
+  [/owe|outstanding|receivable|debtor/i, 'owed', 'invoice.read'],
+  [/\bbill|invoice now|ready to invoice|billable/i, 'bill', 'invoice.read'],
+  [/overload|workload|rebalance|capacity|who('?s| is) busy/i, 'load', 'task.read'],
+  [/approv(al|e)s?\b.*(wait|pending|me)|waiting on me|pending approval/i, 'approvals', 'approval.read'],
+  [/deal|pipeline|follow.?up/i, 'deals', 'customer.read'],
+  [/quot(e|ation)s?/i, 'quotes', 'quote.read'],
+  [/last month|this month|revenue|how did .* go/i, 'month', 'report.read'],
+  [/equipment|asset|laptop|device/i, 'assets', 'asset.read'],
+  [/summar(y|ise|ize).*project|project.*summar/i, 'summary', 'project.read'],
+  [/who can approve/i, 'perm'],
+];
+export function matchIntent(q: string, me: AuthUser): string | null {
+  const hit = INTENTS.find(([re, , perm]) => re.test(q) && (!perm || AccessService.has(me, perm)));
+  return hit ? hit[1] : null;
 }
